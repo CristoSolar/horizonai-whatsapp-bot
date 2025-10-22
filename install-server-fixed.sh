@@ -23,14 +23,13 @@ echo "🚀 Installing HorizonAI WhatsApp Bot..."
 
 # Configuration
 GIT_REPO="https://github.com/CristoSolar/horizonai-whatsapp-bot.git"
-APP_DIR="/opt/horizonai-bots"
+APP_DIR="$HOME/horizonai-whatsapp-bot"
 
 # Install required packages
 sudo apt install -y python3 python3-pip python3-venv nginx redis-server certbot python3-certbot-nginx git
 
 # Create application directory and clone repository
-sudo mkdir -p $APP_DIR
-sudo chown $USER:$USER $APP_DIR
+mkdir -p $APP_DIR
 
 echo "📥 Cloning repository from Git..."
 git clone $GIT_REPO $APP_DIR

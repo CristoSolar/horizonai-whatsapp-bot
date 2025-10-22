@@ -7,7 +7,7 @@ set -e
 
 SERVER_USER="your-server-user"
 SERVER_HOST="your-server-ip"
-SERVER_PATH="/opt/horizonai-bots"
+SERVER_PATH="\$HOME/horizonai-whatsapp-bot"
 GIT_REPO="https://github.com/CristoSolar/horizonai-whatsapp-bot.git"  # Update with your repo URL
 
 echo "🚀 Deploying HorizonAI WhatsApp Bot to $SERVER_HOST..."
