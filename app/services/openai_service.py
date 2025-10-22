@@ -276,7 +276,10 @@ class OpenAIAssistantService:
                 # Try to get existing thread
                 thread_id = redis_client.get(thread_key)
                 if thread_id:
-                    thread_id = thread_id.decode('utf-8')
+                    # Handle both string and bytes from Redis
+                    if isinstance(thread_id, bytes):
+                        thread_id = thread_id.decode('utf-8')
+                    # else: thread_id is already a string
                     
                     # Verify thread still exists in OpenAI
                     try:

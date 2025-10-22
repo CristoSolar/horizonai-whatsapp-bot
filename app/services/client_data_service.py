@@ -29,7 +29,13 @@ class ClientDataManager:
             data = self.redis_client.get(key)
             
             if data:
-                client_data = json.loads(data.decode('utf-8'))
+                # Handle both string and bytes from Redis
+                if isinstance(data, bytes):
+                    data_str = data.decode('utf-8')
+                else:
+                    data_str = data
+                
+                client_data = json.loads(data_str)
                 return client_data
             
             return {}
