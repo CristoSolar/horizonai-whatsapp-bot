@@ -15,11 +15,16 @@ from .routes import register_blueprints
 from .services.horizon_service import HorizonService
 from .services.openai_service import OpenAIAssistantService
 from .services.twilio_service import TwilioMessagingService
+from .logging_config import configure_logging
 
 
 def create_app(config_name: str | None = None) -> Flask:
     """Application factory used by the Flask CLI and WSGI servers."""
     app = Flask(__name__)
+
+    # Configure logging first
+    configure_logging()
+    app.logger.info("🚀 Starting HorizonAI WhatsApp Bot...")
 
     config_object = config_from_env(config_name)
     app.config.from_object(config_object)
@@ -37,6 +42,13 @@ def create_app(config_name: str | None = None) -> Flask:
     app.extensions["horizon_service"] = HorizonService(horizon_extension)
 
     register_blueprints(app)
+
+    @app.get("/test/log")
+    def test_logging():
+        """Test endpoint to verify logging works."""
+        app.logger.info("🧪 Test log message from endpoint")
+        app.logger.info("✅ If you see this, logging is working!")
+        return {"message": "Test log sent - check journalctl", "status": "ok"}
 
     @app.get("/health")
     def healthcheck() -> tuple[dict[str, str | bool], int]:
