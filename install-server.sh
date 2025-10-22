@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-GIT_REPO="https://github.com/your-username/horizonai-whatsapp-bot.git"  # Update with your repo URL
+GIT_REPO="https://github.com/CristoSolar/horizonai-whatsapp-bot.git"  # Update with your repo URL
 APP_DIR="/opt/horizonai-bots"
 
 echo "🚀 Installing HorizonAI WhatsApp Bot..."
