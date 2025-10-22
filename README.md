@@ -153,6 +153,67 @@ pytest
 
 Las pruebas unitarias utilizan `fakeredis` para simular Redis y stubs para OpenAI/Twilio, por lo que no se requieren credenciales reales.
 
+## 👥 Gestión Multi-Cliente
+
+### 🚀 **Sistema Multi-Cliente**
+Este sistema está diseñado para manejar múltiples clientes WhatsApp desde un solo servidor:
+
+- **Un servidor**: Maneja todos los clientes
+- **Múltiples números**: Cada cliente tiene su número independiente  
+- **Asistentes únicos**: Cada cliente tiene su propio asistente de OpenAI
+- **Sin conflictos**: Los mensajes se enrutan automáticamente al bot correcto
+
+### 📋 **Scripts de Gestión:**
+
+#### 🔧 **Servidor:**
+- `cleanup-server.sh`: Limpia logs y archivos temporales
+- `fix-server-installation.sh`: Repara problemas de instalación
+- `install-server-fixed.sh`: Instalación optimizada del servidor
+- `install-server-lightweight.sh`: Instalación minimalista
+
+#### 👥 **Multi-Cliente:**
+- `crear-cliente.sh`: Script automatizado para crear nuevos clientes
+- `monitor-clientes.sh`: Herramienta de monitoreo y gestión de múltiples clientes
+
+#### 📚 **Documentación:**
+- `CLIENTE_NUEVO.md`: Guía completa para agregar nuevos clientes
+- `ARQUITECTURA_MULTICLIENTE.md`: Documentación técnica del sistema multi-cliente
+- `DEPLOYMENT.md`: Proceso de despliegue en producción
+- `GIT_SETUP.md`: Configuración del repositorio Git
+
+### 🏗️ **Agregar Nuevo Cliente**
+
+Para agregar un nuevo cliente, simplemente ejecuta:
+
+```bash
+./crear-cliente.sh
+```
+
+El script te guiará a través del proceso:
+1. Configurar número en Twilio
+2. Crear asistente en OpenAI
+3. Crear bot en el sistema
+4. Probar funcionamiento
+5. Documentar configuración
+
+### 📊 **Monitoreo Multi-Cliente**
+
+Para monitorear todos los clientes:
+
+```bash
+./monitor-clientes.sh
+```
+
+Opciones disponibles:
+- Ver todos los clientes activos
+- Monitorear cliente específico  
+- Logs en tiempo real
+- Buscar en logs
+- Estadísticas de uso
+- Probar bots
+- Crear backups
+- Estado del servidor
+
 ## Próximos pasos sugeridos
 
 - Añadir autenticación y autorización para los endpoints de administración.
