@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# HorizonAI WhatsApp Bot - Server Installation Script
+# Run this script on your Ubuntu/Debian server
+
+set -e
+
+echo "🚀 Installing HorizonAI WhatsApp Bot..."
+
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install required packages
+sudo apt install -y python3 python3-pip python3-venv nginx redis-server docker.io docker-compose-v2 certbot python3-certbot-nginx git
+
+# Create application directory
+sudo mkdir -p /opt/horizonai-bots
+sudo chown $USER:$USER /opt/horizonai-bots
+cd /opt/horizonai-bots
+
+# Clone or copy project files here
+echo "📁 Copy your project files to /opt/horizonai-bots/"
+echo "   You can use: scp, git clone, or rsync"
+
+# Set up Python virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install Python dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.production .env
+echo "⚙️  Edit /opt/horizonai-bots/.env with your actual credentials"
+
+# Start Redis
+sudo systemctl start redis-server
+sudo systemctl enable redis-server
+
+# Configure Nginx
+sudo cp nginx.conf /etc/nginx/sites-available/horizonai-bots
+echo "🌐 Edit /etc/nginx/sites-available/horizonai-bots and update your domain"
+echo "   Then run: sudo ln -s /etc/nginx/sites-available/horizonai-bots /etc/nginx/sites-enabled/"
+
+# Test Nginx configuration
+echo "🔧 After editing nginx config, test with: sudo nginx -t"
+
+# SSL Certificate (after DNS is configured)
+echo "🔒 Once DNS points to this server, run:"
+echo "   sudo certbot --nginx -d whatsapp.yourdomain.com"
+
+# Create systemd service
+sudo tee /etc/systemd/system/horizonai-bots.service > /dev/null <<EOF
+[Unit]
+Description=HorizonAI WhatsApp Bot
+After=network.target
+
+[Service]
+Type=exec
+User=$USER
+WorkingDirectory=/opt/horizonai-bots
+Environment=PATH=/opt/horizonai-bots/venv/bin
+ExecStart=/opt/horizonai-bots/venv/bin/gunicorn --bind 127.0.0.1:8000 --workers 2 --timeout 60 wsgi:app
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start service
+sudo systemctl daemon-reload
+sudo systemctl enable horizonai-bots
+
+echo "✅ Installation complete!"
+echo ""
+echo "📋 Next steps:"
+echo "1. Copy your project files to /opt/horizonai-bots/"
+echo "2. Edit /opt/horizonai-bots/.env with your credentials"
+echo "3. Edit /etc/nginx/sites-available/horizonai-bots with your domain"
+echo "4. Enable nginx site: sudo ln -s /etc/nginx/sites-available/horizonai-bots /etc/nginx/sites-enabled/"
+echo "5. Test nginx: sudo nginx -t"
+echo "6. Restart nginx: sudo systemctl restart nginx"
+echo "7. Configure DNS: whatsapp.yourdomain.com -> your server IP"
+echo "8. Get SSL certificate: sudo certbot --nginx -d whatsapp.yourdomain.com"
+echo "9. Start the service: sudo systemctl start horizonai-bots"
+echo "10. Check logs: sudo journalctl -u horizonai-bots -f"
