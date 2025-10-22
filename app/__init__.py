@@ -47,6 +47,18 @@ def create_app(config_name: str | None = None) -> Flask:
             db_ok = False
         return {"status": "ok", "db": db_ok}, 200
 
+    @app.get("/debug/routes")
+    def debug_routes():
+        """Debug endpoint to see all registered routes."""
+        routes = []
+        for rule in app.url_map.iter_rules():
+            routes.append({
+                "endpoint": rule.endpoint,
+                "methods": list(rule.methods),
+                "rule": rule.rule
+            })
+        return {"routes": routes}
+
     @app.get("/health/db")
     def db_health() -> tuple[dict[str, str], int]:
         try:
@@ -55,5 +67,17 @@ def create_app(config_name: str | None = None) -> Flask:
             return {"database": "unavailable"}, 503
         except Exception as exc:  # pragma: no cover
             return {"database": "error", "detail": str(exc)}, 500
+
+    @app.get("/debug/routes")
+    def debug_routes():
+        """Show all registered routes for debugging."""
+        routes = []
+        for rule in app.url_map.iter_rules():
+            routes.append({
+                "endpoint": rule.endpoint,
+                "methods": list(rule.methods),
+                "rule": str(rule)
+            })
+        return {"routes": routes}
 
     return app
