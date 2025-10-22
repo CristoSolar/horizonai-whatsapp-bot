@@ -35,6 +35,12 @@ def _find_bot_by_number(repository: BotRepository, target_number: Optional[str])
     return None
 
 
+@blueprint.get("/webhook/whatsapp")
+def webhook_health() -> Response:
+    """Health check for webhook endpoint."""
+    return Response("Webhook endpoint is working!", mimetype="text/plain")
+
+
 @blueprint.post("/webhook/whatsapp")
 def receive_whatsapp() -> Response:
     """Handle incoming WhatsApp message webhook from Twilio."""
