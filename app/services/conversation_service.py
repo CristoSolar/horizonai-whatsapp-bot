@@ -12,6 +12,7 @@ from ..repositories import BotRepository
 from ..extensions import db_extension
 from ..repositories.sql_bot_repository import SQLBotRepository
 from .horizon_service import HorizonService
+from .client_data_service import ClientDataManager
 from .openai_service import (
     AssistantFunctionCall,
     AssistantResponse,
@@ -38,6 +39,20 @@ def handle_incoming_message(
         raise BadRequest("Message body is required")
 
     repository = repository or BotRepository(redis_extension.client)
+    
+    # Initialize client data manager
+    client_data_manager = ClientDataManager(redis_extension.client)
+    
+    # Extract information from current message
+    extracted_info = client_data_manager.extract_info_from_message(message)
+    
+    # Update client data with any extracted information
+    for field, value in extracted_info.items():
+        client_data_manager.update_client_data(user_number, field, value)
+    
+    # Get current client data
+    client_data = client_data_manager.get_client_data(user_number)
+    
     bot = repository.get_bot(bot_id)
     # Fallback: if not found in Redis, attempt database lookup (source of truth)
     if not bot:
@@ -65,9 +80,30 @@ def handle_incoming_message(
     conversation = _load_conversation(bot_id=bot_id, user_number=user_number)
     conversation.append({"role": "user", "content": message})
 
+    # Enhance bot instructions with client data
+    enhanced_bot = bot.copy()
+    if client_data:
+        client_info = []
+        if client_data.get('marca'):
+            client_info.append(f"Marca del vehículo: {client_data['marca']}")
+        if client_data.get('modelo'):
+            client_info.append(f"Modelo: {client_data['modelo']}")
+        if client_data.get('año'):
+            client_info.append(f"Año: {client_data['año']}")
+        if client_data.get('combustible'):
+            client_info.append(f"Combustible: {client_data['combustible']}")
+        if client_data.get('start_stop'):
+            client_info.append(f"Start-Stop: {client_data['start_stop']}")
+        if client_data.get('comuna'):
+            client_info.append(f"Comuna: {client_data['comuna']}")
+        
+        if client_info:
+            current_instructions = enhanced_bot.get('instructions', '')
+            enhanced_bot['instructions'] = f"{current_instructions}\n\nINFORMACIÓN YA CONOCIDA DEL CLIENTE:\n" + "\n".join(client_info) + "\n\nNO preguntes por información que ya tienes. Usa esta información para ayudar mejor al cliente."
+
     openai_service = openai_service or current_app.extensions["openai_service"]
     assistant_response = openai_service.generate_reply(
-        bot=bot,
+        bot=enhanced_bot,
         conversation=conversation,
         tool_definitions=bot.get("assistant_functions"),
         user_phone=user_number,
@@ -86,7 +122,7 @@ def handle_incoming_message(
             for result in tool_results
         )
         reply_text = openai_service.summarize_tool_results(
-            bot=bot,
+            bot=enhanced_bot,
             conversation=conversation,
             tool_results=tool_results,
         )

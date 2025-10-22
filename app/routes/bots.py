@@ -155,3 +155,68 @@ def refresh_bot(bot_id: str) -> Response:
     }
     repository.create_bot(snapshot)
     return jsonify({"data": snapshot, "source": "database"}), 200
+
+
+@blueprint.get("/clients/<phone_number>")
+def get_client_data(phone_number: str) -> Response:
+    """Get stored client data by phone number."""
+    from ..services.client_data_service import ClientDataManager
+    
+    client_data_manager = ClientDataManager(redis_extension.client)
+    client_data = client_data_manager.get_client_data(phone_number)
+    
+    if not client_data:
+        return jsonify({"error": "No data found for this client"}), 404
+    
+    return jsonify({"data": client_data}), 200
+
+
+@blueprint.delete("/clients/<phone_number>")
+def clear_client_data(phone_number: str) -> Response:
+    """Clear all data for a client."""
+    from ..services.client_data_service import ClientDataManager
+    
+    client_data_manager = ClientDataManager(redis_extension.client)
+    success = client_data_manager.clear_client_data(phone_number)
+    
+    if success:
+        return jsonify({"message": "Client data cleared successfully"}), 200
+    else:
+        return jsonify({"error": "Failed to clear client data"}), 500
+
+
+@blueprint.get("/clients")
+def list_all_clients() -> Response:
+    """List all clients with data."""
+    from ..services.client_data_service import ClientDataManager
+    import re
+    
+    try:
+        redis_client = redis_extension.client
+        # Get all client data keys
+        keys = redis_client.keys("client_data:*")
+        clients = []
+        
+        for key in keys:
+            try:
+                data = redis_client.get(key)
+                if data:
+                    import json
+                    client_info = json.loads(data.decode('utf-8'))
+                    # Extract phone number from key
+                    phone_match = re.search(r'client_data:(.+)', key.decode('utf-8'))
+                    if phone_match:
+                        phone = phone_match.group(1)
+                        # Add formatted phone for display
+                        if not phone.startswith('+'):
+                            phone = '+' + phone
+                        client_info['formatted_phone'] = phone
+                    clients.append(client_info)
+            except Exception as e:
+                print(f"Error processing client key {key}: {e}")
+                continue
+        
+        return jsonify({"clients": clients, "total": len(clients)}), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Failed to list clients: {str(e)}"}), 500
