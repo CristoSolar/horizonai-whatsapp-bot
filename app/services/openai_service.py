@@ -261,41 +261,48 @@ class OpenAIAssistantService:
 
     def _get_or_create_thread(self, client, user_phone: str = None) -> str:
         """Get existing thread for user or create a new one."""
-        from ..extensions import redis_client
-        
-        if not user_phone:
-            # If no user phone, create a temporary thread
-            thread = client.beta.threads.create()
-            return thread.id
-        
-        # Use Redis to store thread_id per user
-        thread_key = f"thread:{user_phone}"
-        
         try:
-            # Try to get existing thread
-            thread_id = redis_client.get(thread_key)
-            if thread_id:
-                thread_id = thread_id.decode('utf-8')
+            from ..extensions import redis_client
+            
+            if not user_phone:
+                # If no user phone, create a temporary thread
+                thread = client.beta.threads.create()
+                return thread.id
+            
+            # Use Redis to store thread_id per user
+            thread_key = f"thread:{user_phone}"
+            
+            try:
+                # Try to get existing thread
+                thread_id = redis_client.get(thread_key)
+                if thread_id:
+                    thread_id = thread_id.decode('utf-8')
+                    
+                    # Verify thread still exists in OpenAI
+                    try:
+                        client.beta.threads.retrieve(thread_id)
+                        return thread_id
+                    except:
+                        # Thread doesn't exist anymore, create new one
+                        pass
                 
-                # Verify thread still exists in OpenAI
-                try:
-                    client.beta.threads.retrieve(thread_id)
-                    return thread_id
-                except:
-                    # Thread doesn't exist anymore, create new one
-                    pass
-            
-            # Create new thread
-            thread = client.beta.threads.create()
-            thread_id = thread.id
-            
-            # Store in Redis with 7 days expiration
-            redis_client.setex(thread_key, 604800, thread_id)  # 7 days
-            
-            return thread_id
-            
+                # Create new thread
+                thread = client.beta.threads.create()
+                thread_id = thread.id
+                
+                # Store in Redis with 7 days expiration
+                redis_client.setex(thread_key, 604800, thread_id)  # 7 days
+                
+                return thread_id
+                
+            except Exception as redis_error:
+                print(f"Redis error: {redis_error}")
+                # If Redis fails, just create a new thread
+                thread = client.beta.threads.create()
+                return thread.id
+                
         except Exception as e:
-            current_app.logger.error(f"Error managing thread for {user_phone}: {e}")
+            print(f"Error managing thread for {user_phone}: {e}")
             # Fallback: create temporary thread
             thread = client.beta.threads.create()
             return thread.id
