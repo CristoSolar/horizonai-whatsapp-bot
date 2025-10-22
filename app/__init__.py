@@ -48,7 +48,7 @@ def create_app(config_name: str | None = None) -> Flask:
         return {"status": "ok", "db": db_ok}, 200
 
     @app.get("/debug/routes")
-    def debug_routes():
+    def list_routes():
         """Debug endpoint to see all registered routes."""
         routes = []
         for rule in app.url_map.iter_rules():
