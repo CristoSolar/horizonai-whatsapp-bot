@@ -5,22 +5,25 @@
 
 set -e
 
+# Configuration
+GIT_REPO="https://github.com/your-username/horizonai-whatsapp-bot.git"  # Update with your repo URL
+APP_DIR="/opt/horizonai-bots"
+
 echo "🚀 Installing HorizonAI WhatsApp Bot..."
 
 # Update system
 sudo apt update && sudo apt upgrade -y
 
 # Install required packages
-sudo apt install -y python3 python3-pip python3-venv nginx redis-server docker.io docker-compose-v2 certbot python3-certbot-nginx git
+sudo apt install -y python3 python3-pip python3-venv nginx redis-server certbot python3-certbot-nginx git
 
-# Create application directory
-sudo mkdir -p /opt/horizonai-bots
-sudo chown $USER:$USER /opt/horizonai-bots
-cd /opt/horizonai-bots
+# Create application directory and clone repository
+sudo mkdir -p $APP_DIR
+sudo chown $USER:$USER $APP_DIR
 
-# Clone or copy project files here
-echo "📁 Copy your project files to /opt/horizonai-bots/"
-echo "   You can use: scp, git clone, or rsync"
+echo "� Cloning repository from Git..."
+git clone $GIT_REPO $APP_DIR
+cd $APP_DIR
 
 # Set up Python virtual environment
 python3 -m venv venv
@@ -32,7 +35,7 @@ pip install -r requirements.txt
 
 # Configure environment
 cp .env.production .env
-echo "⚙️  Edit /opt/horizonai-bots/.env with your actual credentials"
+echo "⚙️  Edit $APP_DIR/.env with your actual credentials"
 
 # Start Redis
 sudo systemctl start redis-server
