@@ -85,15 +85,23 @@ class OpenAIAssistantService:
             "OPENAI_DEFAULT_MODEL"
         )
 
-        input_messages = self._build_messages(instructions, conversation)
-
-        response = client.responses.create(
-            model=model,
-            input=input_messages,
-            tools=list(tool_definitions or []),
-        )
-
-        return self._parse_response(response)
+        # Check if bot has assistant_id
+        assistant_id = bot.get("assistant_id")
+        
+        if assistant_id:
+            # Use assistant-based conversation
+            return self._generate_assistant_reply(client, assistant_id, conversation)
+        else:
+            # Fall back to regular chat completion
+            input_messages = self._build_messages(instructions, conversation)
+            
+            response = client.chat.completions.create(
+                model=model,
+                messages=input_messages,
+                tools=list(tool_definitions or []) if tool_definitions else None,
+            )
+            
+            return self._parse_chat_response(response)
 
     def summarize_tool_results(
         self,
@@ -193,6 +201,88 @@ class OpenAIAssistantService:
             "He recibido tu mensaje pero el asistente aún no está configurado. "
             f"Mensaje: {last_message}"
         )
+
+    def _generate_assistant_reply(self, client, assistant_id: str, conversation: List[Dict[str, str]]) -> AssistantResponse:
+        """Generate reply using OpenAI assistant."""
+        try:
+            # Create a thread
+            thread = client.beta.threads.create()
+            
+            # Add the latest message to the thread
+            if conversation:
+                latest_message = conversation[-1]
+                if latest_message.get("role") == "user":
+                    client.beta.threads.messages.create(
+                        thread_id=thread.id,
+                        role="user",
+                        content=latest_message.get("content", "")
+                    )
+            
+            # Run the assistant
+            run = client.beta.threads.runs.create(
+                thread_id=thread.id,
+                assistant_id=assistant_id
+            )
+            
+            # Wait for completion
+            import time
+            while run.status in ["queued", "in_progress"]:
+                time.sleep(1)
+                run = client.beta.threads.runs.retrieve(
+                    thread_id=thread.id,
+                    run_id=run.id
+                )
+            
+            if run.status == "completed":
+                # Get messages
+                messages = client.beta.threads.messages.list(thread_id=thread.id)
+                if messages.data:
+                    latest_message = messages.data[0]
+                    if latest_message.role == "assistant":
+                        content = latest_message.content[0]
+                        if hasattr(content, 'text'):
+                            return AssistantResponse(
+                                reply_text=content.text.value,
+                                function_calls=[]
+                            )
+            
+            return AssistantResponse(
+                reply_text="Lo siento, no pude procesar tu mensaje en este momento.",
+                function_calls=[]
+            )
+            
+        except Exception as e:
+            print(f"Error in assistant conversation: {e}")
+            return AssistantResponse(
+                reply_text="Lo siento, hubo un error al procesar tu mensaje.",
+                function_calls=[]
+            )
+    
+    def _parse_chat_response(self, response) -> AssistantResponse:
+        """Parse regular chat completion response."""
+        try:
+            message = response.choices[0].message
+            reply_text = message.content or "No pude generar una respuesta."
+            
+            function_calls = []
+            if hasattr(message, 'tool_calls') and message.tool_calls:
+                for tool_call in message.tool_calls:
+                    if tool_call.type == "function":
+                        function_calls.append(AssistantFunctionCall(
+                            name=tool_call.function.name,
+                            arguments=json.loads(tool_call.function.arguments)
+                        ))
+            
+            return AssistantResponse(
+                reply_text=reply_text,
+                function_calls=function_calls
+            )
+        except Exception as e:
+            print(f"Error parsing chat response: {e}")
+            return AssistantResponse(
+                reply_text="Error al procesar la respuesta.",
+                function_calls=[]
+            )
 
 
 # ----------------------------------------------------------------------
