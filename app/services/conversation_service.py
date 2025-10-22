@@ -33,6 +33,11 @@ def handle_incoming_message(
     openai_service: Optional[OpenAIAssistantService] = None,
     horizon_service: Optional[HorizonService] = None,
 ) -> str:
+    print(f"🎯 handle_incoming_message called:")
+    print(f"   bot_id: {bot_id}")
+    print(f"   user_number: {user_number}")
+    print(f"   message: {message}")
+    
     if not user_number:
         raise BadRequest("Missing sender number")
     if not message:
@@ -41,17 +46,22 @@ def handle_incoming_message(
     repository = repository or BotRepository(redis_extension.client)
     
     # Initialize client data manager
+    print(f"🗃️ Initializing client data manager...")
     client_data_manager = ClientDataManager(redis_extension.client)
     
     # Extract information from current message
+    print(f"🔍 Extracting info from message...")
     extracted_info = client_data_manager.extract_info_from_message(message)
+    print(f"   Extracted: {extracted_info}")
     
     # Update client data with any extracted information
     for field, value in extracted_info.items():
+        print(f"   Updating {field}: {value}")
         client_data_manager.update_client_data(user_number, field, value)
     
     # Get current client data
     client_data = client_data_manager.get_client_data(user_number)
+    print(f"💾 Current client data: {client_data}")
     
     bot = repository.get_bot(bot_id)
     # Fallback: if not found in Redis, attempt database lookup (source of truth)
