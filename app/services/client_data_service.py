@@ -3,8 +3,11 @@ Cliente data storage using Redis.
 Stores customer information to avoid repetitive questions.
 """
 import json
+import logging
 from typing import Dict, Optional, Any
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 class ClientDataManager:
     """Manages client data storage in Redis."""
@@ -32,7 +35,7 @@ class ClientDataManager:
             return {}
             
         except Exception as e:
-            print(f"Error getting client data for {phone_number}: {e}")
+            logger.error(f"Error getting client data for {phone_number}: {e}")
             return {}
     
     def update_client_data(self, phone_number: str, field: str, value: str) -> bool:
@@ -49,7 +52,7 @@ class ClientDataManager:
             return self.save_client_data(phone_number, client_data)
             
         except Exception as e:
-            print(f"Error updating client data for {phone_number}: {e}")
+            logger.error(f"Error updating client data for {phone_number}: {e}")
             return False
     
     def save_client_data(self, phone_number: str, data: Dict[str, Any]) -> bool:
@@ -73,7 +76,7 @@ class ClientDataManager:
             return True
             
         except Exception as e:
-            print(f"Error saving client data for {phone_number}: {e}")
+            logger.error(f"Error saving client data for {phone_number}: {e}")
             return False
     
     def has_required_info(self, phone_number: str, required_fields: list) -> bool:
@@ -104,7 +107,7 @@ class ClientDataManager:
             self.redis_client.delete(key)
             return True
         except Exception as e:
-            print(f"Error clearing client data for {phone_number}: {e}")
+            logger.error(f"Error clearing client data for {phone_number}: {e}")
             return False
     
     def extract_info_from_message(self, message: str) -> Dict[str, str]:

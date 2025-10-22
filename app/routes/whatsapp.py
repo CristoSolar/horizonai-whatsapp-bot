@@ -1,6 +1,7 @@
 """Webhook endpoints to receive WhatsApp events from Twilio."""
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from flask import Blueprint, Response, request
@@ -12,6 +13,7 @@ from ..repositories import BotRepository
 from ..services.conversation_service import handle_incoming_message
 
 blueprint = Blueprint("whatsapp", __name__)
+logger = logging.getLogger(__name__)
 
 
 def _get_repository() -> BotRepository:
@@ -46,59 +48,59 @@ def receive_whatsapp() -> Response:
     """Handle incoming WhatsApp message webhook from Twilio."""
     
     # Log incoming request for debugging
-    print(f"📨 Webhook received:")
-    print(f"   From: {request.values.get('From')}")
-    print(f"   To: {request.values.get('To')}")
-    print(f"   Body: {request.values.get('Body')}")
-    print(f"   All params: {dict(request.values)}")
+    logger.info(f"📨 Webhook received:")
+    logger.info(f"   From: {request.values.get('From')}")
+    logger.info(f"   To: {request.values.get('To')}")
+    logger.info(f"   Body: {request.values.get('Body')}")
+    logger.info(f"   All params: {dict(request.values)}")
     
     repository = _get_repository()
 
     bot_id = request.args.get("bot_id") or request.values.get("BotId")
     if bot_id:
-        print(f"🔍 Looking for bot by ID: {bot_id}")
+        logger.info(f"🔍 Looking for bot by ID: {bot_id}")
         bot = repository.get_bot(bot_id)
         if not bot:
-            print(f"❌ Bot '{bot_id}' not found")
+            logger.error(f"❌ Bot '{bot_id}' not found")
             raise BadRequest(f"Bot '{bot_id}' not found")
     else:
         to_number = request.values.get("To")
-        print(f"🔍 Looking for bot by number: {to_number}")
+        logger.info(f"🔍 Looking for bot by number: {to_number}")
         bot = _find_bot_by_number(repository, to_number)
         if not bot:
-            print(f"❌ No bot found for number: {to_number}")
+            logger.error(f"❌ No bot found for number: {to_number}")
             raise BadRequest("No bot found for the provided WhatsApp number")
 
-    print(f"✅ Bot found: {bot['id']} - {bot.get('name', 'No name')}")
+    logger.info(f"✅ Bot found: {bot['id']} - {bot.get('name', 'No name')}")
 
     from_number = _normalize_number(request.values.get("From"))
     body = request.values.get("Body", "").strip()
     
-    print(f"📞 Processing message:")
-    print(f"   From: {from_number}")
-    print(f"   Message: {body}")
+    logger.info(f"📞 Processing message:")
+    logger.info(f"   From: {from_number}")
+    logger.info(f"   Message: {body}")
     
     if not body:
-        print("❌ Empty message body")
+        logger.error("❌ Empty message body")
         raise BadRequest("Body is required")
 
     try:
-        print(f"🤖 Generating response...")
+        logger.info(f"🤖 Generating response...")
         reply_text = handle_incoming_message(
             bot_id=bot["id"],
             user_number=from_number or "unknown",
             message=body,
             repository=repository,
         )
-        print(f"✅ Response generated: {reply_text[:100]}...")
+        logger.info(f"✅ Response generated: {reply_text[:100]}...")
         
     except Exception as e:
-        print(f"❌ Error generating response: {e}")
+        logger.error(f"❌ Error generating response: {e}")
         import traceback
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
         reply_text = "Lo siento, hubo un error al procesar tu mensaje."
 
     twiml = MessagingResponse()
     twiml.message(reply_text)
-    print(f"📤 Sending TwiML response")
+    logger.info(f"📤 Sending TwiML response")
     return Response(str(twiml), mimetype="application/xml")

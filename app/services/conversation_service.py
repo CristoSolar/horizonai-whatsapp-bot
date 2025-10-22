@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, Iterable, List, Optional
 
 from flask import current_app
@@ -23,6 +24,8 @@ from .openai_service import (
 SESSION_KEY_PATTERN = "session:{bot_id}:{user_number}"
 MAX_HISTORY_MESSAGES = 20
 
+logger = logging.getLogger(__name__)
+
 
 def handle_incoming_message(
     *,
@@ -33,10 +36,10 @@ def handle_incoming_message(
     openai_service: Optional[OpenAIAssistantService] = None,
     horizon_service: Optional[HorizonService] = None,
 ) -> str:
-    print(f"🎯 handle_incoming_message called:")
-    print(f"   bot_id: {bot_id}")
-    print(f"   user_number: {user_number}")
-    print(f"   message: {message}")
+    logger.info(f"🎯 handle_incoming_message called:")
+    logger.info(f"   bot_id: {bot_id}")
+    logger.info(f"   user_number: {user_number}")
+    logger.info(f"   message: {message}")
     
     if not user_number:
         raise BadRequest("Missing sender number")
@@ -46,22 +49,22 @@ def handle_incoming_message(
     repository = repository or BotRepository(redis_extension.client)
     
     # Initialize client data manager
-    print(f"🗃️ Initializing client data manager...")
+    logger.info(f"🗃️ Initializing client data manager...")
     client_data_manager = ClientDataManager(redis_extension.client)
     
     # Extract information from current message
-    print(f"🔍 Extracting info from message...")
+    logger.info(f"🔍 Extracting info from message...")
     extracted_info = client_data_manager.extract_info_from_message(message)
-    print(f"   Extracted: {extracted_info}")
+    logger.info(f"   Extracted: {extracted_info}")
     
     # Update client data with any extracted information
     for field, value in extracted_info.items():
-        print(f"   Updating {field}: {value}")
+        logger.info(f"   Updating {field}: {value}")
         client_data_manager.update_client_data(user_number, field, value)
     
     # Get current client data
     client_data = client_data_manager.get_client_data(user_number)
-    print(f"💾 Current client data: {client_data}")
+    logger.info(f"💾 Current client data: {client_data}")
     
     bot = repository.get_bot(bot_id)
     # Fallback: if not found in Redis, attempt database lookup (source of truth)
