@@ -70,6 +70,7 @@ class OpenAIAssistantService:
         bot: Dict[str, Any],
         conversation: List[Dict[str, str]],
         tool_definitions: Optional[Iterable[Dict[str, Any]]] = None,
+        user_phone: Optional[str] = None,
     ) -> AssistantResponse:
         client = self._extension.client
         if client is None:
@@ -89,8 +90,8 @@ class OpenAIAssistantService:
         assistant_id = bot.get("assistant_id")
         
         if assistant_id:
-            # Use assistant-based conversation
-            return self._generate_assistant_reply(client, assistant_id, conversation)
+            # Use assistant-based conversation with persistent thread
+            return self._generate_assistant_reply(client, assistant_id, conversation, user_phone)
         else:
             # Fall back to regular chat completion
             input_messages = self._build_messages(instructions, conversation)
@@ -202,25 +203,25 @@ class OpenAIAssistantService:
             f"Mensaje: {last_message}"
         )
 
-    def _generate_assistant_reply(self, client, assistant_id: str, conversation: List[Dict[str, str]]) -> AssistantResponse:
-        """Generate reply using OpenAI assistant."""
+    def _generate_assistant_reply(self, client, assistant_id: str, conversation: List[Dict[str, str]], user_phone: str = None) -> AssistantResponse:
+        """Generate reply using OpenAI assistant with persistent thread per user."""
         try:
-            # Create a thread
-            thread = client.beta.threads.create()
+            # Get or create thread for this user
+            thread_id = self._get_or_create_thread(client, user_phone)
             
             # Add the latest message to the thread
             if conversation:
                 latest_message = conversation[-1]
                 if latest_message.get("role") == "user":
                     client.beta.threads.messages.create(
-                        thread_id=thread.id,
+                        thread_id=thread_id,
                         role="user",
                         content=latest_message.get("content", "")
                     )
             
             # Run the assistant
             run = client.beta.threads.runs.create(
-                thread_id=thread.id,
+                thread_id=thread_id,
                 assistant_id=assistant_id
             )
             
@@ -229,13 +230,13 @@ class OpenAIAssistantService:
             while run.status in ["queued", "in_progress"]:
                 time.sleep(1)
                 run = client.beta.threads.runs.retrieve(
-                    thread_id=thread.id,
+                    thread_id=thread_id,
                     run_id=run.id
                 )
             
             if run.status == "completed":
                 # Get messages
-                messages = client.beta.threads.messages.list(thread_id=thread.id)
+                messages = client.beta.threads.messages.list(thread_id=thread_id)
                 if messages.data:
                     latest_message = messages.data[0]
                     if latest_message.role == "assistant":
@@ -257,6 +258,47 @@ class OpenAIAssistantService:
                 reply_text="Lo siento, hubo un error al procesar tu mensaje.",
                 function_calls=[]
             )
+
+    def _get_or_create_thread(self, client, user_phone: str = None) -> str:
+        """Get existing thread for user or create a new one."""
+        from ..extensions import redis_client
+        
+        if not user_phone:
+            # If no user phone, create a temporary thread
+            thread = client.beta.threads.create()
+            return thread.id
+        
+        # Use Redis to store thread_id per user
+        thread_key = f"thread:{user_phone}"
+        
+        try:
+            # Try to get existing thread
+            thread_id = redis_client.get(thread_key)
+            if thread_id:
+                thread_id = thread_id.decode('utf-8')
+                
+                # Verify thread still exists in OpenAI
+                try:
+                    client.beta.threads.retrieve(thread_id)
+                    return thread_id
+                except:
+                    # Thread doesn't exist anymore, create new one
+                    pass
+            
+            # Create new thread
+            thread = client.beta.threads.create()
+            thread_id = thread.id
+            
+            # Store in Redis with 7 days expiration
+            redis_client.setex(thread_key, 604800, thread_id)  # 7 days
+            
+            return thread_id
+            
+        except Exception as e:
+            current_app.logger.error(f"Error managing thread for {user_phone}: {e}")
+            # Fallback: create temporary thread
+            thread = client.beta.threads.create()
+            return thread.id
     
     def _parse_chat_response(self, response) -> AssistantResponse:
         """Parse regular chat completion response."""

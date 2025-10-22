@@ -70,6 +70,7 @@ def handle_incoming_message(
         bot=bot,
         conversation=conversation,
         tool_definitions=bot.get("assistant_functions"),
+        user_phone=user_number,
     )
 
     tool_results: List[ToolResult] = []
