@@ -93,10 +93,9 @@ def handle_incoming_message(
     conversation = _load_conversation(bot_id=bot_id, user_number=user_number)
     conversation.append({"role": "user", "content": message})
 
-    # Enhance bot instructions with client data
-    enhanced_bot = bot.copy()
+    # Construir mensaje de estado actualizado (slots) como mensaje de sistema adicional
+    client_info = []
     if client_data:
-        client_info = []
         if client_data.get('marca'):
             client_info.append(f"Marca del vehículo: {client_data['marca']}")
         if client_data.get('modelo'):
@@ -109,14 +108,23 @@ def handle_incoming_message(
             client_info.append(f"Start-Stop: {client_data['start_stop']}")
         if client_data.get('comuna'):
             client_info.append(f"Comuna: {client_data['comuna']}")
-        
-        if client_info:
-            current_instructions = enhanced_bot.get('instructions', '')
-            enhanced_bot['instructions'] = f"{current_instructions}\n\nINFORMACIÓN YA CONOCIDA DEL CLIENTE:\n" + "\n".join(client_info) + "\n\nNO preguntes por información que ya tienes. Usa esta información para ayudar mejor al cliente."
+
+    # Mensaje de sistema con slots actuales
+    if client_info:
+        estado_slots = "\n".join(client_info)
+        system_state_msg = {
+            "role": "system",
+            "content": f"ESTADO ACTUAL DEL CLIENTE:\n{estado_slots}\n\nNO preguntes por información que ya tienes. Usa esta información para ayudar mejor al cliente."
+        }
+        # Insertar el mensaje de estado al inicio de la conversación (después del system original si existe)
+        if conversation and conversation[0]["role"] == "system":
+            conversation.insert(1, system_state_msg)
+        else:
+            conversation.insert(0, system_state_msg)
 
     openai_service = openai_service or current_app.extensions["openai_service"]
     assistant_response = openai_service.generate_reply(
-        bot=enhanced_bot,
+        bot=bot,
         conversation=conversation,
         tool_definitions=bot.get("assistant_functions"),
         user_phone=user_number,
