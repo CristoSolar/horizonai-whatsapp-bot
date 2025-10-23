@@ -262,16 +262,18 @@ class OpenAIAssistantService:
     def _get_or_create_thread(self, client, user_phone: str = None) -> str:
         """Get existing thread for user or create a new one."""
         try:
-            from ..extensions import redis_client
-            
+            # Usar redis_extension.client en vez de redis_client
+            from ..extensions import redis_extension
+            redis_client = redis_extension.client
+
             if not user_phone:
                 # If no user phone, create a temporary thread
                 thread = client.beta.threads.create()
                 return thread.id
-            
+
             # Use Redis to store thread_id per user
             thread_key = f"thread:{user_phone}"
-            
+
             try:
                 # Try to get existing thread
                 thread_id = redis_client.get(thread_key)
@@ -280,7 +282,7 @@ class OpenAIAssistantService:
                     if isinstance(thread_id, bytes):
                         thread_id = thread_id.decode('utf-8')
                     # else: thread_id is already a string
-                    
+
                     # Verify thread still exists in OpenAI
                     try:
                         client.beta.threads.retrieve(thread_id)
@@ -288,22 +290,22 @@ class OpenAIAssistantService:
                     except:
                         # Thread doesn't exist anymore, create new one
                         pass
-                
+
                 # Create new thread
                 thread = client.beta.threads.create()
                 thread_id = thread.id
-                
+
                 # Store in Redis with 7 days expiration
                 redis_client.setex(thread_key, 604800, thread_id)  # 7 days
-                
+
                 return thread_id
-                
+
             except Exception as redis_error:
                 print(f"Redis error: {redis_error}")
                 # If Redis fails, just create a new thread
                 thread = client.beta.threads.create()
                 return thread.id
-                
+
         except Exception as e:
             print(f"Error managing thread for {user_phone}: {e}")
             # Fallback: create temporary thread
