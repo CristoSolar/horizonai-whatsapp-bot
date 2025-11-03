@@ -139,6 +139,7 @@ def handle_incoming_message(
             horizon_service=horizon_service,
             defined_actions=bot.get("horizon_actions", []),
             function_calls=assistant_response.function_calls,
+            user_number=user_number,
         )
         
         # If using assistants (thread_id and run_id present), submit tool outputs
@@ -213,6 +214,7 @@ def _execute_tool_calls(
     horizon_service: HorizonService,
     defined_actions: Iterable[Dict[str, Any]],
     function_calls: List[AssistantFunctionCall],
+    user_number: str,
 ) -> List[ToolResult]:
     """Execute tool calls, checking custom functions first, then Horizon actions."""
     
@@ -233,13 +235,20 @@ def _execute_tool_calls(
     # Get Redis client for storing lead IDs
     redis_client = redis_extension.client
     
-    # Get Horizon API token from config if available
-    horizon_api_token = current_app.config.get("HORIZON_API_KEY")
+    # Get bot-specific configuration from metadata
+    bot_metadata = bot.get("metadata") or {}
+    horizon_api_token = bot_metadata.get("horizon_api_token") or current_app.config.get("HORIZON_API_KEY")
+    twilio_template_sid = bot_metadata.get("twilio_template_sid")
+    twilio_messaging_service_sid = bot_metadata.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid")
+    sucursal_phone_map = bot_metadata.get("sucursal_phone_map") or {}
     
     custom_functions_service = CustomFunctionsService(
         twilio_service=twilio_service,
         redis_client=redis_client,
         horizon_api_token=horizon_api_token,
+        twilio_template_sid=twilio_template_sid,
+        twilio_messaging_service_sid=twilio_messaging_service_sid,
+        sucursal_phone_map=sucursal_phone_map,
     )
     
     for call in function_calls:
@@ -249,6 +258,7 @@ def _execute_tool_calls(
             bot_context = {
                 "bot_id": bot.get("id"),
                 "twilio_phone_number": bot.get("twilio_phone_number"),
+                "user_number": user_number,
             }
             result = custom_functions_service.execute_custom_function(
                 function_name=call.name,

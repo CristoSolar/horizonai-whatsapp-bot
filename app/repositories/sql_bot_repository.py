@@ -12,7 +12,7 @@ SELECT id, client_id, external_ref, twilio_phone_number, twilio_messaging_servic
        twilio_account_sid, assistant_id, assistant_model, assistant_instructions,
        assistant_functions, openai_api_key, horizon_actions, metadata, status,
        created_at, updated_at
-  FROM whatsapp_bots
+  FROM gestion_whatsappbot
 """
 
 
