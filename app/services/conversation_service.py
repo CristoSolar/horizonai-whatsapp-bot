@@ -14,6 +14,7 @@ from ..extensions import db_extension
 from ..repositories.sql_bot_repository import SQLBotRepository
 from .horizon_service import HorizonService
 from .client_data_service import ClientDataManager
+from .custom_functions_service import CustomFunctionsService
 from .openai_service import (
     AssistantFunctionCall,
     AssistantResponse,
@@ -134,6 +135,7 @@ def handle_incoming_message(
     if assistant_response.function_calls:
         horizon_service = horizon_service or current_app.extensions["horizon_service"]
         tool_results = _execute_tool_calls(
+            bot=bot,
             horizon_service=horizon_service,
             defined_actions=bot.get("horizon_actions", []),
             function_calls=assistant_response.function_calls,
@@ -143,7 +145,7 @@ def handle_incoming_message(
             for result in tool_results
         )
         reply_text = openai_service.summarize_tool_results(
-            bot=enhanced_bot,
+            bot=bot,
             conversation=conversation,
             tool_results=tool_results,
         )
@@ -183,16 +185,61 @@ def _save_conversation(*, bot_id: str, user_number: str, conversation: Iterable[
 
 def _execute_tool_calls(
     *,
+    bot: Dict[str, Any],
     horizon_service: HorizonService,
     defined_actions: Iterable[Dict[str, Any]],
     function_calls: List[AssistantFunctionCall],
 ) -> List[ToolResult]:
+    """Execute tool calls, checking custom functions first, then Horizon actions."""
+    
+    # List of custom function names
+    custom_functions = ["extract_hori_bateriasya_data"]
+    
     results: List[ToolResult] = []
+    
+    # Initialize custom functions service with Twilio and Redis
+    try:
+        twilio_extension = current_app.extensions.get("twilio_extension")
+        from .twilio_service import TwilioMessagingService
+        twilio_service = TwilioMessagingService(twilio_extension) if twilio_extension else None
+    except Exception as e:
+        logger.warning(f"Could not initialize Twilio service: {e}")
+        twilio_service = None
+    
+    # Get Redis client for storing lead IDs
+    redis_client = redis_extension.client
+    
+    # Get Horizon API token from config if available
+    horizon_api_token = current_app.config.get("HORIZON_API_KEY")
+    
+    custom_functions_service = CustomFunctionsService(
+        twilio_service=twilio_service,
+        redis_client=redis_client,
+        horizon_api_token=horizon_api_token,
+    )
+    
     for call in function_calls:
-        result = horizon_service.execute_action(
-            action_name=call.name,
-            defined_actions=defined_actions,
-            arguments=call.arguments,
-        )
-        results.append(ToolResult(name=call.name, content=json.dumps(result)))
+        # Check if it's a custom function
+        if call.name in custom_functions:
+            logger.info(f"Executing custom function: {call.name}")
+            bot_context = {
+                "bot_id": bot.get("id"),
+                "twilio_phone_number": bot.get("twilio_phone_number"),
+            }
+            result = custom_functions_service.execute_custom_function(
+                function_name=call.name,
+                arguments=call.arguments,
+                bot_context=bot_context,
+            )
+            results.append(ToolResult(name=call.name, content=json.dumps(result)))
+        else:
+            # Execute as Horizon action
+            logger.info(f"Executing Horizon action: {call.name}")
+            result = horizon_service.execute_action(
+                action_name=call.name,
+                defined_actions=defined_actions,
+                arguments=call.arguments,
+            )
+            results.append(ToolResult(name=call.name, content=json.dumps(result)))
+    
     return results

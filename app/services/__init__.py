@@ -1,3 +1,5 @@
 """Service layer package."""
 
-__all__ = []
+from .custom_functions_service import CustomFunctionsService
+
+__all__ = ["CustomFunctionsService"]
