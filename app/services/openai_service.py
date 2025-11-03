@@ -20,6 +20,9 @@ class AssistantFunctionCall:
 class AssistantResponse:
     reply_text: str
     function_calls: List[AssistantFunctionCall]
+    thread_id: Optional[str] = None
+    run_id: Optional[str] = None
+    tool_call_ids: Optional[List[str]] = None
 
 
 @dataclass
@@ -227,12 +230,45 @@ class OpenAIAssistantService:
             
             # Wait for completion
             import time
-            while run.status in ["queued", "in_progress"]:
+            max_iterations = 60  # Prevent infinite loop
+            iterations = 0
+            
+            while run.status in ["queued", "in_progress", "requires_action"] and iterations < max_iterations:
+                iterations += 1
                 time.sleep(1)
                 run = client.beta.threads.runs.retrieve(
                     thread_id=thread_id,
                     run_id=run.id
                 )
+                
+                # Handle function calls
+                if run.status == "requires_action":
+                    required_action = run.required_action
+                    if required_action and required_action.type == "submit_tool_outputs":
+                        function_calls = []
+                        tool_calls = required_action.submit_tool_outputs.tool_calls
+                        
+                        for tool_call in tool_calls:
+                            if tool_call.type == "function":
+                                function_name = tool_call.function.name
+                                try:
+                                    arguments = json.loads(tool_call.function.arguments)
+                                except json.JSONDecodeError:
+                                    arguments = {"_raw": tool_call.function.arguments}
+                                
+                                function_calls.append(AssistantFunctionCall(
+                                    name=function_name,
+                                    arguments=arguments
+                                ))
+                        
+                        # Return function calls with thread and run info for submission
+                        return AssistantResponse(
+                            reply_text="",
+                            function_calls=function_calls,
+                            thread_id=thread_id,
+                            run_id=run.id,
+                            tool_call_ids=[tc.id for tc in tool_calls]
+                        )
             
             if run.status == "completed":
                 # Get messages
@@ -247,6 +283,15 @@ class OpenAIAssistantService:
                                 function_calls=[]
                             )
             
+            # Handle other statuses
+            if run.status == "failed":
+                error_msg = run.last_error.message if run.last_error else "Unknown error"
+                print(f"Assistant run failed: {error_msg}")
+            elif run.status == "cancelled":
+                print(f"Assistant run was cancelled")
+            elif run.status == "expired":
+                print(f"Assistant run expired")
+            
             return AssistantResponse(
                 reply_text="Lo siento, no pude procesar tu mensaje en este momento.",
                 function_calls=[]
@@ -258,6 +303,52 @@ class OpenAIAssistantService:
                 reply_text="Lo siento, hubo un error al procesar tu mensaje.",
                 function_calls=[]
             )
+
+    def submit_tool_outputs_and_wait(
+        self,
+        thread_id: str,
+        run_id: str,
+        tool_outputs: List[Dict[str, str]]
+    ) -> str:
+        """Submit tool outputs to a run and wait for completion."""
+        try:
+            client = self._require_client()
+            
+            # Submit tool outputs
+            run = client.beta.threads.runs.submit_tool_outputs(
+                thread_id=thread_id,
+                run_id=run_id,
+                tool_outputs=tool_outputs
+            )
+            
+            # Wait for completion
+            import time
+            max_iterations = 60
+            iterations = 0
+            
+            while run.status in ["queued", "in_progress"] and iterations < max_iterations:
+                iterations += 1
+                time.sleep(1)
+                run = client.beta.threads.runs.retrieve(
+                    thread_id=thread_id,
+                    run_id=run_id
+                )
+            
+            if run.status == "completed":
+                # Get latest assistant message
+                messages = client.beta.threads.messages.list(thread_id=thread_id, limit=1)
+                if messages.data:
+                    latest_message = messages.data[0]
+                    if latest_message.role == "assistant":
+                        content = latest_message.content[0]
+                        if hasattr(content, 'text'):
+                            return content.text.value
+            
+            return "Lo siento, no pude completar tu solicitud."
+            
+        except Exception as e:
+            print(f"Error submitting tool outputs: {e}")
+            return "Lo siento, hubo un error al procesar las acciones."
 
     def _get_or_create_thread(self, client, user_phone: str = None) -> str:
         """Get existing thread for user or create a new one."""

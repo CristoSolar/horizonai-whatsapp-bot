@@ -140,15 +140,39 @@ def handle_incoming_message(
             defined_actions=bot.get("horizon_actions", []),
             function_calls=assistant_response.function_calls,
         )
-        conversation.extend(
-            {"role": "tool", "name": result.name, "content": result.content}
-            for result in tool_results
-        )
-        reply_text = openai_service.summarize_tool_results(
-            bot=bot,
-            conversation=conversation,
-            tool_results=tool_results,
-        )
+        
+        # If using assistants (thread_id and run_id present), submit tool outputs
+        if assistant_response.thread_id and assistant_response.run_id:
+            # Prepare tool outputs for submission
+            tool_outputs = []
+            for i, result in enumerate(tool_results):
+                tool_output = {
+                    "tool_call_id": assistant_response.tool_call_ids[i] if assistant_response.tool_call_ids and i < len(assistant_response.tool_call_ids) else None,
+                    "output": result.content
+                }
+                if tool_output["tool_call_id"]:
+                    tool_outputs.append(tool_output)
+            
+            # Submit tool outputs and get final response
+            if tool_outputs:
+                reply_text = openai_service.submit_tool_outputs_and_wait(
+                    thread_id=assistant_response.thread_id,
+                    run_id=assistant_response.run_id,
+                    tool_outputs=tool_outputs
+                )
+            else:
+                reply_text = "Lo siento, hubo un error procesando las acciones."
+        else:
+            # Using chat completions (not assistant), use old flow
+            conversation.extend(
+                {"role": "tool", "name": result.name, "content": result.content}
+                for result in tool_results
+            )
+            reply_text = openai_service.summarize_tool_results(
+                bot=bot,
+                conversation=conversation,
+                tool_results=tool_results,
+            )
     else:
         reply_text = assistant_response.reply_text
 
