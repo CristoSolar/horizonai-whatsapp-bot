@@ -279,15 +279,29 @@ class CustomFunctionsService:
                     return {"success": False, "error": "El horario seleccionado ya no está disponible"}
 
             # Crear la cita
-            # El API reportó que espera 'fecha_inicio', por compatibilidad usamos ese naming
+            # El API reporta campos 'fecha_inicio' y 'fecha_termino' en respuestas.
+            # Incluimos ambas variantes para compatibilidad hacia atrás si el backend las acepta.
             payload = {
+                # Identificación del vendedor/usuario
                 "vendedor_id": vendedor_id,
+                "usuario_id": vendedor_id,
+                # Fechas en ISO 8601. El backend suele almacenar en UTC; si enviamos -03:00
+                # verás +00:00 con +3h en la respuesta, pero representa la misma hora local.
                 "fecha_inicio": self._format_iso(inicio),
+                "fecha_termino": self._format_iso(fin),
+                # Mantener también 'fecha_fin' por compatibilidad si el backend la admite
                 "fecha_fin": self._format_iso(fin),
+                # Datos del cliente (mapear a lead_*) para que se reflejen en la agenda
+                "lead_nombre": arguments.get("cliente_nombre"),
+                "lead_correo": arguments.get("cliente_email"),
+                "lead_telefono": arguments.get("cliente_telefono"),
+                # Además mantener los campos cliente_* si el backend los usa
                 "cliente_nombre": arguments.get("cliente_nombre"),
                 "cliente_telefono": arguments.get("cliente_telefono"),
                 "cliente_email": arguments.get("cliente_email"),
                 "canal": arguments.get("canal") or "whatsapp",
+                # 'motivo' es visible en listados; 'nota' para detalle
+                "motivo": arguments.get("motivo") or "Videollamada de asesoría",
                 "nota": arguments.get("nota") or "Agendado por asistente HORI",
             }
 
