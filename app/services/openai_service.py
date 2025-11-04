@@ -260,10 +260,31 @@ class OpenAIAssistantService:
                         content=latest_message.get("content", "")
                     )
             
-            # Run the assistant
+            # Run the assistant with current date context
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            
+            # Get current date in Chile timezone
+            chile_tz = ZoneInfo("America/Santiago")
+            now = datetime.now(chile_tz)
+            
+            # Map to Spanish
+            day_names = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+            month_names = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 
+                          'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+            
+            day_name = day_names[now.weekday()]
+            month_name = month_names[now.month - 1]
+            
+            current_date_str = f"{day_name}, {now.day} de {month_name} de {now.year}"
+            current_time_str = now.strftime("%H:%M")
+            
+            additional_instructions = f"CONTEXTO TEMPORAL IMPORTANTE: Hoy es {current_date_str}, hora actual: {current_time_str} (zona horaria: Chile/Santiago UTC-3). Cuando el usuario mencione fechas relativas como 'mañana', 'pasado mañana', 'el viernes', etc., DEBES calcular la fecha correcta basándote en la fecha de HOY ({current_date_str}). NUNCA uses fechas de años anteriores. Por ejemplo, si hoy es {current_date_str} y el usuario dice 'el viernes 8', se refiere al viernes 8 de {month_name} de {now.year}, NO de 2023."
+            
             run = client.beta.threads.runs.create(
                 thread_id=thread_id,
-                assistant_id=assistant_id
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions
             )
             # Mark run as active in Redis (with short TTL)
             try:

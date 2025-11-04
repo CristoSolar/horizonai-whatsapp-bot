@@ -278,9 +278,29 @@ class CustomFunctionsService:
 
             token = arguments.get("horizon_token") or None
             inicio = self._parse_iso(inicio_arg)
+            
+            # VALIDACIÓN: Rechazar fechas en el pasado o años anteriores
+            from datetime import datetime, timedelta
+            from zoneinfo import ZoneInfo
+            chile_tz = ZoneInfo("America/Santiago")
+            now = datetime.now(chile_tz)
+            
+            # Validar que la fecha de inicio no sea de un año anterior
+            if inicio.year < now.year:
+                return {
+                    "success": False, 
+                    "error": f"La fecha proporcionada ({inicio.date()}) es de un año anterior. Por favor, proporciona una fecha del año actual ({now.year})."
+                }
+            
+            # Validar que la fecha no sea en el pasado (con margen de 1 hora)
+            if inicio < now - timedelta(hours=1):
+                return {
+                    "success": False,
+                    "error": f"La fecha proporcionada ({inicio.date()}) ya pasó. Por favor, proporciona una fecha futura."
+                }
+            
             # Si 'fin' no viene, calcular según duración de slot
             if not fin_arg:
-                from datetime import timedelta
                 slot_minutes = int(arguments.get("slot_minutos") or self.slot_minutes_default)
                 fin = inicio + timedelta(minutes=slot_minutes)
             else:
