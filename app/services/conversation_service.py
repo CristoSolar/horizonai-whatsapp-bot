@@ -219,7 +219,13 @@ def _execute_tool_calls(
     """Execute tool calls, checking custom functions first, then Horizon actions."""
     
     # List of custom function names
-    custom_functions = ["extract_hori_bateriasya_data"]
+    custom_functions = [
+        "extract_hori_bateriasya_data",
+        # Orquestación de agendas/CRM
+        "listar_vendedores",
+        "buscar_disponibilidad",
+        "agendar_cita",
+    ]
     
     results: List[ToolResult] = []
     
@@ -238,6 +244,17 @@ def _execute_tool_calls(
     # Get bot-specific configuration from metadata
     bot_metadata = bot.get("metadata") or {}
     horizon_api_token = bot_metadata.get("horizon_api_token") or current_app.config.get("HORIZON_API_KEY")
+    # Override token for specific assistant if provided (per user request)
+    try:
+        assistant_id = bot.get("assistant_id")
+        per_assistant_tokens = {
+            # Token provisto por el cliente para este asistente
+            "asst_1CYCRroCYaf2oeOWU7KGsih9": "f2W3tldUJqnkABs9ndT1pfMWYDF0AXTjPk0HVtyz5iX1TO8mEit8qyXO952eqxUR",
+        }
+        if assistant_id in per_assistant_tokens:
+            horizon_api_token = per_assistant_tokens[assistant_id]
+    except Exception:
+        pass
     twilio_template_sid = bot_metadata.get("twilio_template_sid")
     twilio_messaging_service_sid = bot_metadata.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid")
     sucursal_phone_map = bot_metadata.get("sucursal_phone_map") or {}

@@ -36,6 +36,10 @@ class CustomFunctionsService:
             "macul": "+56978493528",
             "la florida": "+56978493528",
         }
+        # Defaults for agenda logic
+        self.slot_minutes_default = 60
+        self.max_slots_per_vendedor = 5
+        self.request_timeout = 15
         
     def execute_custom_function(
         self,
@@ -48,6 +52,10 @@ class CustomFunctionsService:
         
         handlers = {
             "extract_hori_bateriasya_data": self._handle_bateriasya_extraction,
+            # Agenda/CRM orchestration functions
+            "listar_vendedores": self._handle_listar_vendedores,
+            "buscar_disponibilidad": self._handle_buscar_disponibilidad,
+            "agendar_cita": self._handle_agendar_cita,
         }
         
         handler = handlers.get(function_name)
@@ -59,6 +67,252 @@ class CustomFunctionsService:
         except Exception as e:
             logger.error(f"Error executing custom function {function_name}: {e}")
             return {"error": str(e), "success": False}
+
+    # ---------------------------------------------------------------------
+    # HORIZON API HELPERS (Vendedores, Agendas, Agendar)
+    # ---------------------------------------------------------------------
+    def _api_get(self, path: str, token_override: Optional[str] = None, params: Optional[Dict[str, Any]] = None):
+        headers = {
+            "Authorization": f"Bearer {token_override or self.horizon_api_token}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self.horizon_api_base}{path}"
+        resp = requests.get(url, headers=headers, params=params, timeout=self.request_timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _api_post(self, path: str, payload: Dict[str, Any], token_override: Optional[str] = None):
+        headers = {
+            "Authorization": f"Bearer {token_override or self.horizon_api_token}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self.horizon_api_base}{path}"
+        resp = requests.post(url, headers=headers, json=payload, timeout=self.request_timeout)
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}
+
+    @staticmethod
+    def _parse_iso(dt_str: str):
+        from datetime import datetime
+        # Accept "Z" by translating to +00:00
+        try:
+            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except Exception:
+            raise ValueError(f"Fecha/hora inválida: {dt_str}")
+
+    @staticmethod
+    def _format_iso(dt_obj) -> str:
+        # Always return ISO 8601
+        return dt_obj.isoformat()
+
+    # ----------------------------
+    # listar_vendedores
+    # ----------------------------
+    def _handle_listar_vendedores(self, arguments: Dict[str, Any], bot_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Devuelve lista de vendedores activos desde Horizon."""
+        try:
+            token = arguments.get("horizon_token") or None
+            data = self._api_get("/api/vendedores/", token_override=token)
+            vendedores = []
+            for v in data if isinstance(data, list) else data.get("results", []):
+                vendedores.append({
+                    "id": v.get("id") or v.get("pk") or v.get("vendedor_id"),
+                    "nombre": v.get("nombre") or v.get("name") or v.get("full_name"),
+                    "username": v.get("username") or v.get("user") or None,
+                })
+            return {"success": True, "vendedores": vendedores}
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error listando vendedores: {e}")
+            return {"success": False, "error": "No se pudo obtener la lista de vendedores"}
+
+    # ----------------------------
+    # buscar_disponibilidad
+    # ----------------------------
+    def _handle_buscar_disponibilidad(self, arguments: Dict[str, Any], bot_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Calcula slots libres por vendedor entre 'desde' y 'hasta'."""
+        from datetime import timedelta
+        try:
+            desde_str = arguments.get("desde")
+            hasta_str = arguments.get("hasta")
+            preferencia_usuario = arguments.get("preferencia_usuario")
+            slot_minutes = int(arguments.get("slot_minutos") or self.slot_minutes_default)
+            token = arguments.get("horizon_token") or None
+
+            if not desde_str or not hasta_str:
+                return {"success": False, "error": "Parámetros 'desde' y 'hasta' son requeridos (ISO 8601)"}
+
+            desde = self._parse_iso(desde_str)
+            hasta = self._parse_iso(hasta_str)
+            if hasta <= desde:
+                return {"success": False, "error": "Rango de fechas inválido"}
+
+            # Obtener vendedores
+            vend_resp = self._handle_listar_vendedores({"horizon_token": token}, bot_context)
+            if not vend_resp.get("success"):
+                return vend_resp
+            vendedores = vend_resp.get("vendedores", [])
+
+            disponibilidad = []
+            for vendedor in vendedores:
+                vid = vendedor.get("id")
+                try:
+                    # Obtener todos los agendamientos del vendedor
+                    agendas = self._api_get("/api/agendamientos/", token_override=token, params={"vendedor_id": vid})
+                    eventos = agendas if isinstance(agendas, list) else agendas.get("results", [])
+
+                    # Normalizar y filtrar por rango
+                    busy = []
+                    for ev in eventos:
+                        inicio = ev.get("inicio") or ev.get("start") or ev.get("fecha_inicio")
+                        fin = ev.get("fin") or ev.get("end") or ev.get("fecha_fin")
+                        if not inicio or not fin:
+                            continue
+                        try:
+                            di = self._parse_iso(inicio)
+                            df = self._parse_iso(fin)
+                        except Exception:
+                            continue
+                        if df <= desde or di >= hasta:
+                            continue
+                        busy.append((max(di, desde), min(df, hasta)))
+
+                    # Unir intervalos ocupados y ordenar
+                    busy.sort(key=lambda x: x[0])
+                    merged = []
+                    for b in busy:
+                        if not merged or b[0] > merged[-1][1]:
+                            merged.append(list(b))
+                        else:
+                            merged[-1][1] = max(merged[-1][1], b[1])
+
+                    # Calcular gaps libres entre [desde, hasta]
+                    free_slots = []
+                    cursor = desde
+                    for b in merged:
+                        if b[0] - cursor >= timedelta(minutes=slot_minutes):
+                            free_slots.append((cursor, b[0]))
+                        cursor = max(cursor, b[1])
+                    if hasta - cursor >= timedelta(minutes=slot_minutes):
+                        free_slots.append((cursor, hasta))
+
+                    # Proponer inicios de slot de tamaño slot_minutes dentro de cada gap
+                    proposals = []
+                    step = timedelta(minutes=slot_minutes)
+                    for (g_start, g_end) in free_slots:
+                        s = g_start
+                        while s + step <= g_end:
+                            proposals.append(self._format_iso(s))
+                            s = s + step
+
+                    # Tomar los 3–5 más cercanos
+                    propuestas_cortas = proposals[: self.max_slots_per_vendedor]
+
+                    disponibilidad.append({
+                        "vendedor_id": vid,
+                        "vendedor_nombre": vendedor.get("nombre"),
+                        "slot_minutos": slot_minutes,
+                        "propuestas": propuestas_cortas,
+                        "total_en_rango": len(proposals),
+                    })
+
+                except requests.exceptions.RequestException as e:
+                    logger.warning(f"Error obteniendo agendas para vendedor {vid}: {e}")
+                    disponibilidad.append({
+                        "vendedor_id": vid,
+                        "vendedor_nombre": vendedor.get("nombre"),
+                        "error": "No se pudo consultar la agenda de este vendedor",
+                    })
+
+            return {"success": True, "disponibilidad": disponibilidad, "desde": desde_str, "hasta": hasta_str, "preferencia_usuario": preferencia_usuario}
+
+        except ValueError as ve:
+            return {"success": False, "error": str(ve)}
+        except Exception as e:
+            logger.error(f"Error en buscar_disponibilidad: {e}")
+            return {"success": False, "error": "No se pudo calcular la disponibilidad"}
+
+    # ----------------------------
+    # agendar_cita
+    # ----------------------------
+    def _handle_agendar_cita(self, arguments: Dict[str, Any], bot_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Crea una cita si el slot sigue disponible. Devuelve detalle del evento."""
+        try:
+            required = [
+                "vendedor_id", "inicio", "fin", "cliente_nombre", "cliente_telefono",
+            ]
+            missing = [k for k in required if not arguments.get(k)]
+            if missing:
+                return {"success": False, "error": f"Faltan campos requeridos: {', '.join(missing)}"}
+
+            token = arguments.get("horizon_token") or None
+            vendedor_id = arguments.get("vendedor_id")
+            inicio = self._parse_iso(arguments.get("inicio"))
+            fin = self._parse_iso(arguments.get("fin"))
+            if fin <= inicio:
+                return {"success": False, "error": "El fin debe ser mayor al inicio"}
+
+            # Validar disponibilidad del vendedor justo antes de crear
+            agendas = self._api_get("/api/agendamientos/", token_override=token, params={"vendedor_id": vendedor_id})
+            eventos = agendas if isinstance(agendas, list) else agendas.get("results", [])
+            for ev in eventos:
+                ev_ini = ev.get("inicio") or ev.get("start") or ev.get("fecha_inicio")
+                ev_fin = ev.get("fin") or ev.get("end") or ev.get("fecha_fin")
+                if not ev_ini or not ev_fin:
+                    continue
+                try:
+                    di = self._parse_iso(ev_ini)
+                    df = self._parse_iso(ev_fin)
+                except Exception:
+                    continue
+                # Overlap check
+                if not (df <= inicio or di >= fin):
+                    return {"success": False, "error": "El horario seleccionado ya no está disponible"}
+
+            # Crear la cita
+            payload = {
+                "vendedor_id": vendedor_id,
+                "inicio": self._format_iso(inicio),
+                "fin": self._format_iso(fin),
+                "cliente_nombre": arguments.get("cliente_nombre"),
+                "cliente_telefono": arguments.get("cliente_telefono"),
+                "cliente_email": arguments.get("cliente_email"),
+                "canal": arguments.get("canal") or "whatsapp",
+                "nota": arguments.get("nota") or "Agendado por asistente HORI",
+            }
+
+            try:
+                created = self._api_post("/api/agendamientos/", payload, token_override=token)
+            except requests.exceptions.HTTPError as http_err:
+                # Si la API valida y entrega mensajes, retornarlos
+                msg = getattr(http_err, "response", None)
+                detail = msg.text if msg is not None else str(http_err)
+                logger.error(f"Error creando agendamiento: {detail}")
+                return {"success": False, "error": "No se pudo crear la cita", "detail": detail}
+
+            event_id = (created or {}).get("id") or (created or {}).get("pk")
+            event_link = (created or {}).get("link") or (created or {}).get("url")
+
+            result = {
+                "success": True,
+                "evento": {
+                    "id": event_id,
+                    "inicio": payload["inicio"],
+                    "fin": payload["fin"],
+                    "vendedor_id": vendedor_id,
+                    "link": event_link,
+                },
+                "mensaje_confirmacion": (
+                    f"Cita agendada para {payload['inicio']} con vendedor {vendedor_id}."
+                    + (f" Enlace: {event_link}" if event_link else "")
+                ),
+            }
+            return result
+
+        except ValueError as ve:
+            return {"success": False, "error": str(ve)}
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error de red al agendar cita: {e}")
+            return {"success": False, "error": "Error de conexión con CRM"}
     
     def _create_horizon_lead(
         self,
