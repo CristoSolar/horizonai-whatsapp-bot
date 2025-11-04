@@ -237,17 +237,27 @@ class CustomFunctionsService:
     def _handle_agendar_cita(self, arguments: Dict[str, Any], bot_context: Dict[str, Any]) -> Dict[str, Any]:
         """Crea una cita si el slot sigue disponible. Devuelve detalle del evento."""
         try:
-            required = [
-                "vendedor_id", "inicio", "fin", "cliente_nombre", "cliente_telefono",
-            ]
-            missing = [k for k in required if not arguments.get(k)]
-            if missing:
-                return {"success": False, "error": f"Faltan campos requeridos: {', '.join(missing)}"}
+            # Aceptar tanto 'inicio'/'fin' como 'fecha_inicio'/'fecha_fin'
+            inicio_arg = arguments.get("inicio") or arguments.get("fecha_inicio")
+            fin_arg = arguments.get("fin") or arguments.get("fecha_fin")
+            vendedor_id = arguments.get("vendedor_id")
+            if not vendedor_id:
+                return {"success": False, "error": "Falta 'vendedor_id'"}
+            if not inicio_arg:
+                return {"success": False, "error": "Falta 'inicio' o 'fecha_inicio'"}
+            # Nombre y teléfono son requeridos por el flujo
+            if not arguments.get("cliente_nombre") or not arguments.get("cliente_telefono"):
+                return {"success": False, "error": "Faltan datos del cliente (nombre y teléfono)"}
 
             token = arguments.get("horizon_token") or None
-            vendedor_id = arguments.get("vendedor_id")
-            inicio = self._parse_iso(arguments.get("inicio"))
-            fin = self._parse_iso(arguments.get("fin"))
+            inicio = self._parse_iso(inicio_arg)
+            # Si 'fin' no viene, calcular según duración de slot
+            if not fin_arg:
+                from datetime import timedelta
+                slot_minutes = int(arguments.get("slot_minutos") or self.slot_minutes_default)
+                fin = inicio + timedelta(minutes=slot_minutes)
+            else:
+                fin = self._parse_iso(fin_arg)
             if fin <= inicio:
                 return {"success": False, "error": "El fin debe ser mayor al inicio"}
 
@@ -269,10 +279,11 @@ class CustomFunctionsService:
                     return {"success": False, "error": "El horario seleccionado ya no está disponible"}
 
             # Crear la cita
+            # El API reportó que espera 'fecha_inicio', por compatibilidad usamos ese naming
             payload = {
                 "vendedor_id": vendedor_id,
-                "inicio": self._format_iso(inicio),
-                "fin": self._format_iso(fin),
+                "fecha_inicio": self._format_iso(inicio),
+                "fecha_fin": self._format_iso(fin),
                 "cliente_nombre": arguments.get("cliente_nombre"),
                 "cliente_telefono": arguments.get("cliente_telefono"),
                 "cliente_email": arguments.get("cliente_email"),
@@ -296,13 +307,13 @@ class CustomFunctionsService:
                 "success": True,
                 "evento": {
                     "id": event_id,
-                    "inicio": payload["inicio"],
-                    "fin": payload["fin"],
+                    "inicio": payload["fecha_inicio"],
+                    "fin": payload["fecha_fin"],
                     "vendedor_id": vendedor_id,
                     "link": event_link,
                 },
                 "mensaje_confirmacion": (
-                    f"Cita agendada para {payload['inicio']} con vendedor {vendedor_id}."
+                    f"Cita agendada para {payload['fecha_inicio']} con vendedor {vendedor_id}."
                     + (f" Enlace: {event_link}" if event_link else "")
                 ),
             }
