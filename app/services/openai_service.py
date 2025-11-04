@@ -211,6 +211,44 @@ class OpenAIAssistantService:
         try:
             # Get or create thread for this user
             thread_id = self._get_or_create_thread(client, user_phone)
+            # Concurrency guard: avoid adding messages while a run is active
+            from ..extensions import redis_extension
+            redis_client = redis_extension.client
+            active_run_key = f"oa:thread:{thread_id}:active_run"
+            try:
+                existing_run_id = redis_client.get(active_run_key)
+                if existing_run_id:
+                    # Verify status with API and wait briefly
+                    try:
+                        run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=existing_run_id if isinstance(existing_run_id, str) else existing_run_id.decode('utf-8'))
+                        import time
+                        max_wait_secs = 5
+                        waited = 0
+                        while run.status in ["queued", "in_progress", "requires_action"] and waited < max_wait_secs:
+                            time.sleep(0.5)
+                            waited += 0.5
+                            run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                        if run.status in ["queued", "in_progress", "requires_action"]:
+                            # Still active; return a soft notice
+                            return AssistantResponse(
+                                reply_text="Estoy finalizando la acción anterior, dame unos segundos y vuelve a intentarlo.",
+                                function_calls=[]
+                            )
+                        else:
+                            # Clear flag
+                            try:
+                                redis_client.delete(active_run_key)
+                            except Exception:
+                                pass
+                    except Exception:
+                        # If retrieve fails, clear flag and continue
+                        try:
+                            redis_client.delete(active_run_key)
+                        except Exception:
+                            pass
+            except Exception:
+                # If Redis not available, continue without guard
+                pass
             
             # Add the latest message to the thread
             if conversation:
@@ -227,6 +265,11 @@ class OpenAIAssistantService:
                 thread_id=thread_id,
                 assistant_id=assistant_id
             )
+            # Mark run as active in Redis (with short TTL)
+            try:
+                redis_client.setex(active_run_key, 300, run.id)
+            except Exception:
+                pass
             
             # Wait for completion
             import time
@@ -278,6 +321,11 @@ class OpenAIAssistantService:
                     if latest_message.role == "assistant":
                         content = latest_message.content[0]
                         if hasattr(content, 'text'):
+                            # Clear active run flag on completion
+                            try:
+                                redis_client.delete(active_run_key)
+                            except Exception:
+                                pass
                             return AssistantResponse(
                                 reply_text=content.text.value,
                                 function_calls=[]
@@ -291,6 +339,11 @@ class OpenAIAssistantService:
                 print(f"Assistant run was cancelled")
             elif run.status == "expired":
                 print(f"Assistant run expired")
+            # Clear flag on terminal state
+            try:
+                redis_client.delete(active_run_key)
+            except Exception:
+                pass
             
             return AssistantResponse(
                 reply_text="Lo siento, no pude procesar tu mensaje en este momento.",
@@ -313,6 +366,9 @@ class OpenAIAssistantService:
         """Submit tool outputs to a run and wait for completion."""
         try:
             client = self._require_client()
+            from ..extensions import redis_extension
+            redis_client = redis_extension.client
+            active_run_key = f"oa:thread:{thread_id}:active_run"
             
             # Submit tool outputs
             run = client.beta.threads.runs.submit_tool_outputs(
@@ -342,8 +398,17 @@ class OpenAIAssistantService:
                     if latest_message.role == "assistant":
                         content = latest_message.content[0]
                         if hasattr(content, 'text'):
+                            try:
+                                redis_client.delete(active_run_key)
+                            except Exception:
+                                pass
                             return content.text.value
             
+            # Clear flag on terminal states as safety
+            try:
+                redis_client.delete(active_run_key)
+            except Exception:
+                pass
             return "Lo siento, no pude completar tu solicitud."
             
         except Exception as e:
