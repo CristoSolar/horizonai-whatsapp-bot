@@ -101,9 +101,36 @@ class CustomFunctionsService:
             raise ValueError(f"Fecha/hora inválida: {dt_str}")
 
     @staticmethod
-    def _format_iso(dt_obj) -> str:
-        # Always return ISO 8601
+    def _format_iso(dt_obj, to_utc: bool = False) -> str:
+        # Return ISO 8601; optionally convert to UTC with Z suffix
+        try:
+            from datetime import timezone
+            if to_utc:
+                if dt_obj.tzinfo is None:
+                    # assume local offset -03:00 if naive (Chile typical); adjust if needed
+                    from datetime import timedelta
+                    dt_obj = dt_obj.replace(tzinfo=timezone(timedelta(hours=-3)))
+                dt_obj = dt_obj.astimezone(timezone.utc)
+                return dt_obj.isoformat().replace('+00:00', 'Z')
+        except Exception:
+            pass
         return dt_obj.isoformat()
+
+    @staticmethod
+    def _format_local_naive(dt_obj) -> str:
+        """Format datetime in America/Santiago as naive ISO yyyy-mm-ddTHH:MM:SS (no tz).
+        Falls back to naive without conversion if zoneinfo not available.
+        """
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo("America/Santiago")
+            if dt_obj.tzinfo is None:
+                # assume already local; just make naive with seconds
+                return dt_obj.replace(microsecond=0).isoformat()
+            local_dt = dt_obj.astimezone(tz)
+            return local_dt.replace(tzinfo=None, microsecond=0).isoformat()
+        except Exception:
+            return dt_obj.replace(tzinfo=None, microsecond=0).isoformat()
 
     # ----------------------------
     # listar_vendedores
@@ -278,41 +305,41 @@ class CustomFunctionsService:
                 if not (df <= inicio or di >= fin):
                     return {"success": False, "error": "El horario seleccionado ya no está disponible"}
 
-            # Crear la cita
-            # El API reporta campos 'fecha_inicio' y 'fecha_termino' en respuestas.
-            # Incluimos ambas variantes para compatibilidad hacia atrás si el backend las acepta.
-            payload = {
-                # Identificación del vendedor/usuario
+            # Crear la cita - intento 1: payload según especificación "crear agendamiento creando lead"
+            # Preferido por el CRM: vendedor_id + fecha_inicio (naive local) + motivo + lead_* básicos
+            preferred_payload = {
                 "vendedor_id": vendedor_id,
-                "usuario_id": vendedor_id,
-                # Fechas en ISO 8601. El backend suele almacenar en UTC; si enviamos -03:00
-                # verás +00:00 con +3h en la respuesta, pero representa la misma hora local.
-                "fecha_inicio": self._format_iso(inicio),
-                "fecha_termino": self._format_iso(fin),
-                # Mantener también 'fecha_fin' por compatibilidad si el backend la admite
-                "fecha_fin": self._format_iso(fin),
-                # Datos del cliente (mapear a lead_*) para que se reflejen en la agenda
-                "lead_nombre": arguments.get("cliente_nombre"),
-                "lead_correo": arguments.get("cliente_email"),
-                "lead_telefono": arguments.get("cliente_telefono"),
-                # Además mantener los campos cliente_* si el backend los usa
-                "cliente_nombre": arguments.get("cliente_nombre"),
-                "cliente_telefono": arguments.get("cliente_telefono"),
-                "cliente_email": arguments.get("cliente_email"),
-                "canal": arguments.get("canal") or "whatsapp",
-                # 'motivo' es visible en listados; 'nota' para detalle
+                "fecha_inicio": self._format_local_naive(inicio),
                 "motivo": arguments.get("motivo") or "Videollamada de asesoría",
-                "nota": arguments.get("nota") or "Agendado por asistente HORI",
+                "lead_correo": arguments.get("cliente_email"),
+                "lead_nombre": arguments.get("cliente_nombre"),
+                "lead_producto_servicio": arguments.get("lead_producto_servicio") or "Asesoría",
             }
 
+            created = None
             try:
-                created = self._api_post("/api/agendamientos/", payload, token_override=token)
+                created = self._api_post("/api/agendamientos/", preferred_payload, token_override=token)
             except requests.exceptions.HTTPError as http_err:
-                # Si la API valida y entrega mensajes, retornarlos
+                # Fallback: payload mínimo
                 msg = getattr(http_err, "response", None)
                 detail = msg.text if msg is not None else str(http_err)
-                logger.error(f"Error creando agendamiento: {detail}")
-                return {"success": False, "error": "No se pudo crear la cita", "detail": detail}
+                logger.error(f"Error creando agendamiento (full): {detail}")
+                # Fallback 1: intentar con usuario_id + fechas UTC
+                usuario_id = arguments.get("usuario_id") or vendedor_id
+                minimal_payload = {
+                    "usuario_id": usuario_id,
+                    "fecha_inicio": self._format_iso(inicio, to_utc=True),
+                    "fecha_termino": self._format_iso(fin, to_utc=True),
+                    "motivo": arguments.get("motivo") or "Videollamada de asesoría",
+                    "interno": False,
+                }
+                try:
+                    created = self._api_post("/api/agendamientos/", minimal_payload, token_override=token)
+                    logger.info("Agendamiento creado con payload mínimo tras fallback")
+                except requests.exceptions.RequestException as e2:
+                    detail2 = getattr(e2, "response", None)
+                    detail_text = detail2.text if detail2 is not None else str(e2)
+                    return {"success": False, "error": "No se pudo crear la cita", "detail": detail_text}
 
             event_id = (created or {}).get("id") or (created or {}).get("pk")
             event_link = (created or {}).get("link") or (created or {}).get("url")
@@ -321,24 +348,24 @@ class CustomFunctionsService:
                 "success": True,
                 "evento": {
                     "id": event_id,
-                    "inicio": payload["fecha_inicio"],
-                    "fin": payload["fecha_fin"],
+                    "inicio": (created or {}).get("fecha_inicio") or preferred_payload["fecha_inicio"],
+                    "fin": (created or {}).get("fecha_termino") or (created or {}).get("fecha_fin"),
                     "vendedor_id": vendedor_id,
+                    "usuario_id": arguments.get("usuario_id") or vendedor_id,
                     "link": event_link,
                 },
                 "mensaje_confirmacion": (
-                    f"Cita agendada para {payload['fecha_inicio']} con vendedor {vendedor_id}."
+                    f"Cita agendada para {((created or {}).get('fecha_inicio') or preferred_payload['fecha_inicio'])} con vendedor {vendedor_id}."
                     + (f" Enlace: {event_link}" if event_link else "")
                 ),
             }
             return result
-
         except ValueError as ve:
             return {"success": False, "error": str(ve)}
         except requests.exceptions.RequestException as e:
             logger.error(f"Error de red al agendar cita: {e}")
             return {"success": False, "error": "Error de conexión con CRM"}
-    
+
     def _create_horizon_lead(
         self,
         *,
@@ -350,7 +377,6 @@ class CustomFunctionsService:
         vendedor_username: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Create a lead in Horizon Manager API."""
-        
         try:
             url = f"{self.horizon_api_base}/api/leads/"
             headers = {
@@ -364,17 +390,13 @@ class CustomFunctionsService:
                 "telefono": telefono,
                 "mensaje": mensaje,
             }
-            
             if vendedor_username:
                 payload["vendedor_username"] = vendedor_username
-            
             response = requests.post(url, headers=headers, json=payload, timeout=10)
             response.raise_for_status()
-            
             lead_data = response.json()
             logger.info(f"Lead created in Horizon: ID={lead_data.get('id')}")
             return lead_data
-            
         except requests.exceptions.RequestException as e:
             logger.error(f"Error creating lead in Horizon: {e}")
             if hasattr(e, 'response') and e.response is not None:
