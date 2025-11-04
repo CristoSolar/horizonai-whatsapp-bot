@@ -282,7 +282,8 @@ def _execute_tool_calls(
     for call in function_calls:
         # Check if it's a custom function
         if call.name in custom_functions:
-            logger.info(f"Executing custom function: {call.name}")
+            logger.info(f"🔧 Executing custom function: {call.name}")
+            logger.info(f"   Arguments: {call.arguments}")
             bot_context = {
                 "bot_id": bot.get("id"),
                 "twilio_phone_number": bot.get("twilio_phone_number"),
@@ -293,6 +294,7 @@ def _execute_tool_calls(
                 arguments=call.arguments,
                 bot_context=bot_context,
             )
+            logger.info(f"   Result: {result}")
             results.append(ToolResult(name=call.name, content=json.dumps(result)))
         else:
             # Execute as Horizon action

@@ -264,20 +264,31 @@ class CustomFunctionsService:
     def _handle_agendar_cita(self, arguments: Dict[str, Any], bot_context: Dict[str, Any]) -> Dict[str, Any]:
         """Crea una cita si el slot sigue disponible. Devuelve detalle del evento."""
         try:
+            logger.info(f"🗓️ _handle_agendar_cita called with arguments: {arguments}")
+            
             # Aceptar tanto 'inicio'/'fin' como 'fecha_inicio'/'fecha_fin'
             inicio_arg = arguments.get("inicio") or arguments.get("fecha_inicio")
             fin_arg = arguments.get("fin") or arguments.get("fecha_fin")
             vendedor_id = arguments.get("vendedor_id")
+            
+            logger.info(f"   vendedor_id: {vendedor_id}")
+            logger.info(f"   inicio_arg: {inicio_arg}")
+            logger.info(f"   fin_arg: {fin_arg}")
+            
             if not vendedor_id:
+                logger.error("❌ Falta 'vendedor_id'")
                 return {"success": False, "error": "Falta 'vendedor_id'"}
             if not inicio_arg:
+                logger.error("❌ Falta 'inicio' o 'fecha_inicio'")
                 return {"success": False, "error": "Falta 'inicio' o 'fecha_inicio'"}
             # Nombre y teléfono son requeridos por el flujo
             if not arguments.get("cliente_nombre") or not arguments.get("cliente_telefono"):
+                logger.error(f"❌ Faltan datos del cliente - nombre: {arguments.get('cliente_nombre')}, telefono: {arguments.get('cliente_telefono')}")
                 return {"success": False, "error": "Faltan datos del cliente (nombre y teléfono)"}
 
             token = arguments.get("horizon_token") or None
             inicio = self._parse_iso(inicio_arg)
+            logger.info(f"   inicio parsed: {inicio} (year: {inicio.year})")
             
             # VALIDACIÓN: Rechazar fechas en el pasado o años anteriores
             from datetime import datetime, timedelta
@@ -285,18 +296,24 @@ class CustomFunctionsService:
             chile_tz = ZoneInfo("America/Santiago")
             now = datetime.now(chile_tz)
             
+            logger.info(f"   now (Chile): {now} (year: {now.year})")
+            
             # Validar que la fecha de inicio no sea de un año anterior
             if inicio.year < now.year:
+                error_msg = f"La fecha proporcionada ({inicio.date()}) es de un año anterior. Por favor, proporciona una fecha del año actual ({now.year})."
+                logger.error(f"❌ {error_msg}")
                 return {
                     "success": False, 
-                    "error": f"La fecha proporcionada ({inicio.date()}) es de un año anterior. Por favor, proporciona una fecha del año actual ({now.year})."
+                    "error": error_msg
                 }
             
             # Validar que la fecha no sea en el pasado (con margen de 1 hora)
             if inicio < now - timedelta(hours=1):
+                error_msg = f"La fecha proporcionada ({inicio.date()}) ya pasó. Por favor, proporciona una fecha futura."
+                logger.error(f"❌ {error_msg}")
                 return {
                     "success": False,
-                    "error": f"La fecha proporcionada ({inicio.date()}) ya pasó. Por favor, proporciona una fecha futura."
+                    "error": error_msg
                 }
             
             # Si 'fin' no viene, calcular según duración de slot
@@ -335,10 +352,13 @@ class CustomFunctionsService:
                 "lead_nombre": arguments.get("cliente_nombre"),
                 "lead_producto_servicio": arguments.get("lead_producto_servicio") or "Asesoría",
             }
+            
+            logger.info(f"📤 Sending preferred_payload to CRM: {preferred_payload}")
 
             created = None
             try:
                 created = self._api_post("/api/agendamientos/", preferred_payload, token_override=token)
+                logger.info(f"✅ Agendamiento created successfully: {created}")
             except requests.exceptions.HTTPError as http_err:
                 # Fallback: payload mínimo
                 msg = getattr(http_err, "response", None)
@@ -379,12 +399,17 @@ class CustomFunctionsService:
                     + (f" Enlace: {event_link}" if event_link else "")
                 ),
             }
+            logger.info(f"✅ _handle_agendar_cita returning success: {result}")
             return result
         except ValueError as ve:
+            logger.error(f"❌ ValueError in _handle_agendar_cita: {ve}")
             return {"success": False, "error": str(ve)}
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error de red al agendar cita: {e}")
+            logger.error(f"❌ RequestException in _handle_agendar_cita: {e}")
             return {"success": False, "error": "Error de conexión con CRM"}
+        except Exception as e:
+            logger.error(f"❌ Unexpected error in _handle_agendar_cita: {e}", exc_info=True)
+            return {"success": False, "error": f"Error inesperado: {str(e)}"}
 
     def _create_horizon_lead(
         self,
