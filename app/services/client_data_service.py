@@ -12,14 +12,18 @@ logger = logging.getLogger(__name__)
 class ClientDataManager:
     """Manages client data storage in Redis."""
     
-    def __init__(self, redis_client):
+    def __init__(self, redis_client, namespace: str | None = None):
         self.redis_client = redis_client
         self.expiration_days = 30  # Data expires after 30 days
+        # Optional namespace to isolate by bot/assistant
+        self.namespace = namespace
     
     def _get_client_key(self, phone_number: str) -> str:
         """Generate Redis key for client data."""
         # Clean phone number (remove spaces, special chars)
         clean_phone = phone_number.replace("+", "").replace("-", "").replace(" ", "")
+        if self.namespace:
+            return f"client_data:{self.namespace}:{clean_phone}"
         return f"client_data:{clean_phone}"
     
     def get_client_data(self, phone_number: str) -> Dict[str, Any]:

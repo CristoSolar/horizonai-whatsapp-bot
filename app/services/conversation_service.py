@@ -49,24 +49,6 @@ def handle_incoming_message(
 
     repository = repository or BotRepository(redis_extension.client)
     
-    # Initialize client data manager
-    logger.info(f"🗃️ Initializing client data manager...")
-    client_data_manager = ClientDataManager(redis_extension.client)
-    
-    # Extract information from current message
-    logger.info(f"🔍 Extracting info from message...")
-    extracted_info = client_data_manager.extract_info_from_message(message)
-    logger.info(f"   Extracted: {extracted_info}")
-    
-    # Update client data with any extracted information
-    for field, value in extracted_info.items():
-        logger.info(f"   Updating {field}: {value}")
-        client_data_manager.update_client_data(user_number, field, value)
-    
-    # Get current client data
-    client_data = client_data_manager.get_client_data(user_number)
-    logger.info(f"💾 Current client data: {client_data}")
-    
     bot = repository.get_bot(bot_id)
     # Fallback: if not found in Redis, attempt database lookup (source of truth)
     if not bot:
@@ -90,6 +72,24 @@ def handle_incoming_message(
             pass
     if not bot:
         raise NotFound(f"Bot '{bot_id}' not found")
+
+    # Initialize client data manager (namespaced per bot)
+    logger.info(f"🗃️ Initializing client data manager...")
+    client_data_manager = ClientDataManager(redis_extension.client, namespace=bot_id)
+    
+    # Extract information from current message
+    logger.info(f"🔍 Extracting info from message...")
+    extracted_info = client_data_manager.extract_info_from_message(message)
+    logger.info(f"   Extracted: {extracted_info}")
+    
+    # Update client data with any extracted information
+    for field, value in extracted_info.items():
+        logger.info(f"   Updating {field}: {value}")
+        client_data_manager.update_client_data(user_number, field, value)
+    
+    # Get current client data
+    client_data = client_data_manager.get_client_data(user_number)
+    logger.info(f"💾 Current client data: {client_data}")
 
     conversation = _load_conversation(bot_id=bot_id, user_number=user_number)
     conversation.append({"role": "user", "content": message})
@@ -154,12 +154,23 @@ def handle_incoming_message(
                 if tool_output["tool_call_id"]:
                     tool_outputs.append(tool_output)
             
-            # Submit tool outputs and get final response
+            # Define executor for subsequent tool calls if the run asks again
+            def _on_tool_calls(calls: List[AssistantFunctionCall]) -> List[ToolResult]:
+                return _execute_tool_calls(
+                    bot=bot,
+                    horizon_service=horizon_service,
+                    defined_actions=bot.get("horizon_actions", []),
+                    function_calls=calls,
+                    user_number=user_number,
+                )
+
+            # Submit tool outputs and get final response (supports multi-round tools)
             if tool_outputs:
                 reply_text = openai_service.submit_tool_outputs_and_wait(
                     thread_id=assistant_response.thread_id,
                     run_id=assistant_response.run_id,
-                    tool_outputs=tool_outputs
+                    tool_outputs=tool_outputs,
+                    on_tool_calls=_on_tool_calls,
                 )
             else:
                 reply_text = "Lo siento, hubo un error procesando las acciones."

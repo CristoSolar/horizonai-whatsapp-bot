@@ -210,7 +210,7 @@ class OpenAIAssistantService:
         """Generate reply using OpenAI assistant with persistent thread per user."""
         try:
             # Get or create thread for this user
-            thread_id = self._get_or_create_thread(client, user_phone)
+            thread_id = self._get_or_create_thread(client, user_phone, namespace=assistant_id)
             # Concurrency guard: avoid adding messages while a run is active
             from ..extensions import redis_extension
             redis_client = redis_extension.client
@@ -361,7 +361,8 @@ class OpenAIAssistantService:
         self,
         thread_id: str,
         run_id: str,
-        tool_outputs: List[Dict[str, str]]
+        tool_outputs: List[Dict[str, str]],
+        on_tool_calls: Optional[Any] = None,
     ) -> str:
         """Submit tool outputs to a run and wait for completion."""
         try:
@@ -382,13 +383,43 @@ class OpenAIAssistantService:
             max_iterations = 60
             iterations = 0
             
-            while run.status in ["queued", "in_progress"] and iterations < max_iterations:
+            while run.status in ["queued", "in_progress", "requires_action"] and iterations < max_iterations:
                 iterations += 1
                 time.sleep(1)
                 run = client.beta.threads.runs.retrieve(
                     thread_id=thread_id,
                     run_id=run_id
                 )
+                # Handle subsequent tool calls
+                if run.status == "requires_action" and on_tool_calls is not None:
+                    required_action = run.required_action
+                    tool_calls = required_action.submit_tool_outputs.tool_calls if required_action else []
+                    calls: List[AssistantFunctionCall] = []
+                    call_ids: List[str] = []
+                    for tc in tool_calls:
+                        if tc.type == "function":
+                            call_ids.append(tc.id)
+                            try:
+                                args = json.loads(tc.function.arguments)
+                            except json.JSONDecodeError:
+                                args = {"_raw": tc.function.arguments}
+                            calls.append(AssistantFunctionCall(name=tc.function.name, arguments=args))
+                    if calls:
+                        try:
+                            results: List[ToolResult] = on_tool_calls(calls)
+                            # Align outputs by index
+                            outputs_payload = []
+                            for i, cid in enumerate(call_ids):
+                                output_str = results[i].content if i < len(results) else "{}"
+                                outputs_payload.append({"tool_call_id": cid, "output": output_str})
+                            run = client.beta.threads.runs.submit_tool_outputs(
+                                thread_id=thread_id,
+                                run_id=run_id,
+                                tool_outputs=outputs_payload,
+                            )
+                            continue
+                        except Exception:
+                            pass
             
             if run.status == "completed":
                 # Get latest assistant message
@@ -415,8 +446,10 @@ class OpenAIAssistantService:
             print(f"Error submitting tool outputs: {e}")
             return "Lo siento, hubo un error al procesar las acciones."
 
-    def _get_or_create_thread(self, client, user_phone: str = None) -> str:
-        """Get existing thread for user or create a new one."""
+    def _get_or_create_thread(self, client, user_phone: str = None, namespace: str | None = None) -> str:
+        """Get existing thread for user or create a new one.
+        Namespace isolates threads per assistant/bot when provided.
+        """
         try:
             # Usar redis_extension.client en vez de redis_client
             from ..extensions import redis_extension
@@ -427,8 +460,9 @@ class OpenAIAssistantService:
                 thread = client.beta.threads.create()
                 return thread.id
 
-            # Use Redis to store thread_id per user
-            thread_key = f"thread:{user_phone}"
+            # Use Redis to store thread_id per user (and namespace if provided)
+            ns = namespace or "default"
+            thread_key = f"thread:{ns}:{user_phone}"
 
             try:
                 # Try to get existing thread
