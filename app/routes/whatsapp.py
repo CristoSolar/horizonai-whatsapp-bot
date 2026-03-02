@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Optional
 
 from flask import Blueprint, Response, request
@@ -11,6 +12,7 @@ from werkzeug.exceptions import BadRequest
 from ..extensions import redis_extension
 from ..repositories import BotRepository
 from ..services.conversation_service import handle_incoming_message
+from ..services.outbound_whatsapp_service import OutboundWhatsAppService
 
 blueprint = Blueprint("whatsapp", __name__)
 logger = logging.getLogger(__name__)
@@ -35,6 +37,27 @@ def _find_bot_by_number(repository: BotRepository, target_number: Optional[str])
         if stored == normalized:
             return bot
     return None
+
+
+def _resolve_tenant_id(bot: dict) -> str:
+    metadata = bot.get("metadata") or {}
+    return (
+        metadata.get("tenant_id")
+        or bot.get("client_id")
+        or bot.get("id")
+    )
+
+
+def _register_last_inbound(bot: dict, from_number: Optional[str]) -> None:
+    if not from_number:
+        return
+    tenant_id = _resolve_tenant_id(bot)
+    service = OutboundWhatsAppService(redis_extension.client)
+    service.mark_last_inbound(
+        tenant_id=tenant_id,
+        to_e164=from_number,
+        at=datetime.now(UTC),
+    )
 
 
 @blueprint.get("/webhook/whatsapp")
@@ -75,6 +98,8 @@ def receive_whatsapp() -> Response:
 
     from_number = _normalize_number(request.values.get("From"))
     body = request.values.get("Body", "").strip()
+
+    _register_last_inbound(bot, from_number)
     
     logger.info(f"📞 Processing message:")
     logger.info(f"   From: {from_number}")

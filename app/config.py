@@ -1,6 +1,7 @@
 """Configuration objects and helpers for the Flask application."""
 from __future__ import annotations
 
+import json
 import os
 from typing import Type
 
@@ -56,6 +57,21 @@ class BaseConfig:
         return None
 
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+    OUTBOUND_API_KEY = os.getenv("OUTBOUND_API_KEY")
+    OUTBOUND_HMAC_SECRET = os.getenv("OUTBOUND_HMAC_SECRET")
+    OUTBOUND_MAX_TIMESTAMP_SKEW_SECONDS = int(
+        os.getenv("OUTBOUND_MAX_TIMESTAMP_SKEW_SECONDS", "300")
+    )
+    OUTBOUND_STATUS_CALLBACK_URL = os.getenv("OUTBOUND_STATUS_CALLBACK_URL")
+
+    _TWILIO_AUTH_TOKEN_REFS_RAW = os.getenv("TWILIO_AUTH_TOKEN_REFS", "{}")
+    try:
+        TWILIO_AUTH_TOKEN_REFS = json.loads(_TWILIO_AUTH_TOKEN_REFS_RAW)
+        if not isinstance(TWILIO_AUTH_TOKEN_REFS, dict):
+            TWILIO_AUTH_TOKEN_REFS = {}
+    except json.JSONDecodeError:
+        TWILIO_AUTH_TOKEN_REFS = {}
 
 
 class DevelopmentConfig(BaseConfig):
