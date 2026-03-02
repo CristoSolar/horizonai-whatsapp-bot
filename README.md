@@ -116,7 +116,7 @@ Crea un archivo `.env` en la raíz basado en `.env.example` y completa las crede
 docker-compose up --build
 ```
 
-El servicio Flask estará disponible en `http://localhost:8000`. Redis se expone por defecto en el puerto definido por `HOST_REDIS_PORT` (6380 en este ejemplo) para evitar conflictos con instalaciones locales (`localhost:6380`).
+El servicio Flask estará disponible por defecto en `http://localhost:8001` (puedes cambiarlo con `HOST_WEB_PORT`). Redis se expone por defecto en el puerto definido por `HOST_REDIS_PORT` (6380 en este ejemplo) para evitar conflictos con instalaciones locales (`localhost:6380`).
 
 ## Ejecución local sin Docker
 
