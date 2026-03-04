@@ -5,6 +5,11 @@ from typing import Optional
 
 from flask import current_app
 
+try:
+    from twilio.rest import Client as TwilioClient  # type: ignore
+except Exception:  # pragma: no cover
+    TwilioClient = None  # type: ignore
+
 from ..extensions import TwilioExtension
 
 
@@ -18,25 +23,31 @@ class TwilioMessagingService:
         to_number: str,
         body: str,
         from_number: Optional[str] = None,
+        messaging_service_sid: Optional[str] = None,
+        twilio_account_sid: Optional[str] = None,
+        twilio_auth_token: Optional[str] = None,
         media_url: Optional[str] = None,
     ) -> Optional[str]:
-        client = self._extension.client
-        if client is None:
-            raise RuntimeError(
-                "Twilio client is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN."
-            )
-
-        outbound = self._format_whatsapp_number(
-            from_number or current_app.config.get("TWILIO_WHATSAPP_FROM")
+        client = self._resolve_client(
+            twilio_account_sid=twilio_account_sid,
+            twilio_auth_token=twilio_auth_token,
         )
         destination = self._format_whatsapp_number(to_number)
 
-        message = client.messages.create(
-            from_=outbound,
-            to=destination,
-            body=body,
-            media_url=media_url,
-        )
+        params = {
+            "to": destination,
+            "body": body,
+            "media_url": media_url,
+        }
+        if messaging_service_sid:
+            params["messaging_service_sid"] = messaging_service_sid
+        else:
+            outbound = self._format_whatsapp_number(
+                from_number or current_app.config.get("TWILIO_WHATSAPP_FROM")
+            )
+            params["from_"] = outbound
+
+        message = client.messages.create(**params)
         return getattr(message, "sid", None)
 
     def send_whatsapp_template(
@@ -47,6 +58,8 @@ class TwilioMessagingService:
         content_variables: Optional[dict] = None,
         from_number: Optional[str] = None,
         messaging_service_sid: Optional[str] = None,
+        twilio_account_sid: Optional[str] = None,
+        twilio_auth_token: Optional[str] = None,
     ) -> Optional[str]:
         """Send WhatsApp message using an approved Content Template.
         
@@ -62,11 +75,10 @@ class TwilioMessagingService:
         """
         import json
         
-        client = self._extension.client
-        if client is None:
-            raise RuntimeError(
-                "Twilio client is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN."
-            )
+        client = self._resolve_client(
+            twilio_account_sid=twilio_account_sid,
+            twilio_auth_token=twilio_auth_token,
+        )
 
         destination = self._format_whatsapp_number(to_number)
         
@@ -90,6 +102,24 @@ class TwilioMessagingService:
         
         message = client.messages.create(**params)
         return getattr(message, "sid", None)
+
+    def _resolve_client(
+        self,
+        *,
+        twilio_account_sid: Optional[str] = None,
+        twilio_auth_token: Optional[str] = None,
+    ):
+        if twilio_account_sid and twilio_auth_token:
+            if TwilioClient is None:
+                raise RuntimeError("twilio package is not available in runtime")
+            return TwilioClient(twilio_account_sid, twilio_auth_token)
+
+        client = self._extension.client
+        if client is None:
+            raise RuntimeError(
+                "Twilio client is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN."
+            )
+        return client
 
     @staticmethod
     def _format_whatsapp_number(number: Optional[str]) -> str:

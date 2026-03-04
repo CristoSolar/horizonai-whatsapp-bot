@@ -587,8 +587,18 @@ class CustomFunctionsService:
             message_sid = None
             if self.twilio_service:
                 try:
-                    from_number = bot_context.get("twilio_phone_number")
-                    logger.info(f"Attempting to send WhatsApp to {target_phone} from {from_number}")
+                    from_number = bot_context.get("twilio_from_whatsapp") or bot_context.get("twilio_phone_number")
+                    twilio_account_sid = bot_context.get("twilio_account_sid")
+                    twilio_auth_token = bot_context.get("twilio_auth_token")
+                    twilio_messaging_service_sid = bot_context.get("twilio_messaging_service_sid") or self.twilio_messaging_service_sid
+
+                    logger.info(
+                        "Attempting to send WhatsApp to %s from %s (account_sid=%s, messaging_service_sid=%s)",
+                        target_phone,
+                        from_number,
+                        twilio_account_sid or "ENV_DEFAULT",
+                        twilio_messaging_service_sid or "NONE",
+                    )
                     
                     # Try to use template first (for initiating conversations)
                     # Template variables (adjust based on your approved template)
@@ -608,7 +618,9 @@ class CustomFunctionsService:
                                 content_sid=self.twilio_template_sid,
                                 content_variables=template_vars,
                                 from_number=from_number,
-                                messaging_service_sid=self.twilio_messaging_service_sid,
+                                messaging_service_sid=twilio_messaging_service_sid,
+                                twilio_account_sid=twilio_account_sid,
+                                twilio_auth_token=twilio_auth_token,
                             )
                             logger.info(f"WhatsApp template notification sent to {target_phone}, SID: {message_sid}")
                             whatsapp_sent = True
@@ -625,6 +637,9 @@ class CustomFunctionsService:
                             to_number=target_phone,
                             body=message_body,
                             from_number=from_number,
+                            messaging_service_sid=twilio_messaging_service_sid,
+                            twilio_account_sid=twilio_account_sid,
+                            twilio_auth_token=twilio_auth_token,
                         )
                         logger.info(f"WhatsApp freeform notification sent to {target_phone}, SID: {message_sid}")
                         whatsapp_sent = True

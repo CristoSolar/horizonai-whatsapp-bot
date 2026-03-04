@@ -91,6 +91,13 @@ def handle_incoming_message(
     client_data = client_data_manager.get_client_data(user_number)
     logger.info(f"💾 Current client data: {client_data}")
 
+    _try_auto_dispatch_bateriasya_lead(
+        bot=bot,
+        user_number=user_number,
+        client_data_manager=client_data_manager,
+        client_data=client_data,
+    )
+
     conversation = _load_conversation(bot_id=bot_id, user_number=user_number)
     conversation.append({"role": "user", "content": message})
 
@@ -219,6 +226,30 @@ def _save_conversation(*, bot_id: str, user_number: str, conversation: Iterable[
         redis_client.set(key, serialized)
 
 
+def _resolve_twilio_auth_token_from_metadata(bot_metadata: Dict[str, Any]) -> Optional[str]:
+    token = bot_metadata.get("twilio_auth_token")
+    if token:
+        return token
+
+    token_ref = bot_metadata.get("twilio_auth_token_ref")
+    if not token_ref:
+        return None
+
+    token_map = current_app.config.get("TWILIO_AUTH_TOKEN_REFS") or {}
+    resolved = token_map.get(token_ref)
+    return resolved or None
+
+
+def _resolve_bot_twilio_credentials(bot: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    metadata = bot.get("metadata") or {}
+    return {
+        "twilio_account_sid": metadata.get("twilio_account_sid") or bot.get("twilio_account_sid"),
+        "twilio_auth_token": _resolve_twilio_auth_token_from_metadata(metadata),
+        "twilio_messaging_service_sid": metadata.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid"),
+        "twilio_from_whatsapp": metadata.get("twilio_from_whatsapp") or bot.get("twilio_phone_number"),
+    }
+
+
 def _execute_tool_calls(
     *,
     bot: Dict[str, Any],
@@ -278,6 +309,8 @@ def _execute_tool_calls(
         twilio_messaging_service_sid=twilio_messaging_service_sid,
         sucursal_phone_map=sucursal_phone_map,
     )
+
+    twilio_credentials = _resolve_bot_twilio_credentials(bot)
     
     for call in function_calls:
         # Check if it's a custom function
@@ -288,6 +321,10 @@ def _execute_tool_calls(
                 "bot_id": bot.get("id"),
                 "twilio_phone_number": bot.get("twilio_phone_number"),
                 "user_number": user_number,
+                "twilio_account_sid": twilio_credentials.get("twilio_account_sid"),
+                "twilio_auth_token": twilio_credentials.get("twilio_auth_token"),
+                "twilio_messaging_service_sid": twilio_credentials.get("twilio_messaging_service_sid"),
+                "twilio_from_whatsapp": twilio_credentials.get("twilio_from_whatsapp"),
             }
             result = custom_functions_service.execute_custom_function(
                 function_name=call.name,
@@ -307,3 +344,101 @@ def _execute_tool_calls(
             results.append(ToolResult(name=call.name, content=json.dumps(result)))
     
     return results
+
+
+def _try_auto_dispatch_bateriasya_lead(
+    *,
+    bot: Dict[str, Any],
+    user_number: str,
+    client_data_manager: ClientDataManager,
+    client_data: Dict[str, Any],
+) -> None:
+    assistant_id = (bot.get("assistant_id") or "").strip()
+    bot_name = (bot.get("name") or "").lower()
+    is_bateriasya = ("bateria" in bot_name) or (assistant_id == "asst_svobnYajdAylQaM5Iqz8Dof3")
+    if not is_bateriasya:
+        return
+
+    if client_data.get("notification_sent"):
+        return
+
+    required_fields = ["comuna", "marca", "modelo", "año", "combustible", "start_stop", "nombre", "telefono"]
+    missing = [field for field in required_fields if not client_data.get(field)]
+    if missing:
+        return
+
+    try:
+        twilio_extension = current_app.extensions.get("twilio_extension")
+        from .twilio_service import TwilioMessagingService
+
+        twilio_service = TwilioMessagingService(twilio_extension) if twilio_extension else None
+        twilio_credentials = _resolve_bot_twilio_credentials(bot)
+        bot_metadata = bot.get("metadata") or {}
+        horizon_api_token = bot_metadata.get("horizon_api_token") or current_app.config.get("HORIZON_API_KEY")
+        twilio_template_sid = bot_metadata.get("twilio_template_sid")
+        twilio_messaging_service_sid = bot_metadata.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid")
+        sucursal_phone_map = bot_metadata.get("sucursal_phone_map") or {}
+
+        service = CustomFunctionsService(
+            twilio_service=twilio_service,
+            redis_client=redis_extension.client,
+            horizon_api_token=horizon_api_token,
+            twilio_template_sid=twilio_template_sid,
+            twilio_messaging_service_sid=twilio_messaging_service_sid,
+            sucursal_phone_map=sucursal_phone_map,
+        )
+
+        full_name = str(client_data.get("nombre", "")).strip()
+        name_parts = [part for part in full_name.split() if part]
+        first_name = name_parts[0] if name_parts else ""
+        last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+
+        payload = {
+            "servicio": {
+                "comuna": client_data.get("comuna"),
+            },
+            "vehiculo": {
+                "marca": client_data.get("marca"),
+                "modelo": client_data.get("modelo"),
+                "anio": int(client_data.get("año")) if str(client_data.get("año", "")).isdigit() else client_data.get("año"),
+                "combustible": str(client_data.get("combustible", "")).lower().replace("é", "e"),
+                "start_stop": "si" if str(client_data.get("start_stop", "")).lower() in {"sí", "si", "true", "1"} else "no",
+            },
+            "cliente": {
+                "nombre": first_name,
+                "apellido": last_name,
+                "rut": client_data.get("rut", "N/A"),
+                "direccion": client_data.get("direccion", "N/A"),
+                "referencia": client_data.get("referencia", "N/A"),
+                "telefono": client_data.get("telefono"),
+                "correo": client_data.get("correo", "sin-correo@pendiente.cl"),
+            },
+            "estado_flujo": "agendando",
+        }
+        bot_context = {
+            "bot_id": bot.get("id"),
+            "twilio_phone_number": bot.get("twilio_phone_number"),
+            "user_number": user_number,
+            "twilio_account_sid": twilio_credentials.get("twilio_account_sid"),
+            "twilio_auth_token": twilio_credentials.get("twilio_auth_token"),
+            "twilio_messaging_service_sid": twilio_credentials.get("twilio_messaging_service_sid"),
+            "twilio_from_whatsapp": twilio_credentials.get("twilio_from_whatsapp"),
+        }
+
+        result = service.execute_custom_function(
+            function_name="extract_hori_bateriasya_data",
+            arguments=payload,
+            bot_context=bot_context,
+        )
+
+        if result.get("success"):
+            client_data_manager.update_client_data(user_number, "notification_sent", True)
+            if result.get("message_sid"):
+                client_data_manager.update_client_data(user_number, "notification_message_sid", result.get("message_sid"))
+            if result.get("target_phone"):
+                client_data_manager.update_client_data(user_number, "notification_target_phone", result.get("target_phone"))
+            logger.info(f"✅ Auto-dispatch BateriasYa ejecutado para {user_number}: {result}")
+        else:
+            logger.warning(f"⚠️ Auto-dispatch BateriasYa sin éxito para {user_number}: {result}")
+    except Exception as exc:
+        logger.error(f"❌ Error en auto-dispatch BateriasYa para {user_number}: {exc}")

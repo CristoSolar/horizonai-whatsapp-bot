@@ -124,9 +124,16 @@ class ClientDataManager:
         """Extract structured information from user message."""
         message_lower = message.lower()
         extracted = {}
+        import re
+
+        lines = [line.strip() for line in message.splitlines() if line.strip()]
         
         # Extract vehicle brand
-        brands = ['volkswagen', 'vw', 'toyota', 'chevrolet', 'ford', 'nissan', 'hyundai', 'kia']
+        brands = [
+            'volkswagen', 'vw', 'toyota', 'chevrolet', 'ford', 'nissan', 'hyundai',
+            'kia', 'mg', 'peugeot', 'citroen', 'renault', 'mazda', 'suzuki', 'chery',
+            'jac', 'fiat', 'subaru', 'jeep', 'honda', 'mitsubishi'
+        ]
         for brand in brands:
             if brand in message_lower:
                 extracted['marca'] = brand.title()
@@ -139,14 +146,13 @@ class ClientDataManager:
                 extracted['modelo'] = model.title()
                 break
         
-        # Extract year (4 digits between 1990-2025)
-        import re
-        year_match = re.search(r'\b(19[9]\d|20[0-2]\d)\b', message)
+        # Extract year (4 digits between 1990-2035)
+        year_match = re.search(r'\b(19[9]\d|20[0-3]\d)\b', message)
         if year_match:
             extracted['año'] = year_match.group(1)
         
         # Extract fuel type
-        if any(word in message_lower for word in ['bencinero', 'gasolina', 'nafta']):
+        if any(word in message_lower for word in ['bencinero', 'gasolina', 'nafta', 'bencina']):
             extracted['combustible'] = 'Bencinero'
         elif any(word in message_lower for word in ['diesel', 'diésel']):
             extracted['combustible'] = 'Diesel'
@@ -157,6 +163,10 @@ class ClientDataManager:
                 extracted['start_stop'] = 'No'
             else:
                 extracted['start_stop'] = 'Sí'
+        elif any(word in message_lower for word in ['si tiene', 'sí tiene', 'con start', 'tiene start', 'start stop si']):
+            extracted['start_stop'] = 'Sí'
+        elif any(word in message_lower for word in ['no tiene', 'sin start', 'start stop no']):
+            extracted['start_stop'] = 'No'
         
         # Extract location/comuna
         comunas = ['la florida', 'florida', 'curicó', 'curico', 'santiago', 'maipu', 'las condes']
@@ -164,5 +174,42 @@ class ClientDataManager:
             if comuna in message_lower:
                 extracted['comuna'] = comuna.title()
                 break
+
+        phone_match = re.search(r'(\+?56)?\s?9\s?\d{4}\s?\d{4}', message)
+        if phone_match:
+            digits = re.sub(r'\D', '', phone_match.group(0))
+            if len(digits) == 9 and digits.startswith('9'):
+                extracted['telefono'] = f'+56{digits}'
+            elif len(digits) == 11 and digits.startswith('569'):
+                extracted['telefono'] = f'+{digits}'
+            elif len(digits) == 12 and digits.startswith('56'):
+                extracted['telefono'] = f'+{digits}'
+
+        if len(lines) >= 2:
+            first_line = re.sub(r'[^A-Za-zÁÉÍÓÚáéíóúÑñ ]', ' ', lines[0]).strip()
+            if first_line and len(first_line.split()) >= 2 and 'nombre' not in extracted:
+                extracted['nombre'] = first_line
+
+        if len(lines) >= 5:
+            if not extracted.get('marca') and re.search(r'[A-Za-zÁÉÍÓÚáéíóúÑñ]{2,}', lines[0]):
+                extracted['marca'] = lines[0].strip().title()
+            if not extracted.get('modelo') and re.search(r'[A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\- ]{2,}', lines[1]):
+                extracted['modelo'] = lines[1].strip().title()
+            if not extracted.get('año'):
+                ym = re.search(r'\b(19[9]\d|20[0-3]\d)\b', lines[2])
+                if ym:
+                    extracted['año'] = ym.group(1)
+            if not extracted.get('combustible'):
+                fuel_line = lines[3].lower()
+                if any(word in fuel_line for word in ['bencin', 'gasolina', 'nafta']):
+                    extracted['combustible'] = 'Bencinero'
+                elif any(word in fuel_line for word in ['diesel', 'diésel']):
+                    extracted['combustible'] = 'Diesel'
+            if not extracted.get('start_stop'):
+                start_line = lines[4].lower()
+                if any(word in start_line for word in ['si', 'sí', 'tiene', 'con']):
+                    extracted['start_stop'] = 'Sí'
+                elif any(word in start_line for word in ['no', 'sin']):
+                    extracted['start_stop'] = 'No'
         
         return extracted
