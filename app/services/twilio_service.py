@@ -109,6 +109,17 @@ class TwilioMessagingService:
         twilio_account_sid: Optional[str] = None,
         twilio_auth_token: Optional[str] = None,
     ):
+        if twilio_account_sid and not twilio_auth_token:
+            raise RuntimeError(
+                "Bot Twilio config is incomplete: twilio_account_sid is set but twilio_auth_token is missing. "
+                "Set metadata.twilio_auth_token or metadata.twilio_auth_token_ref."
+            )
+
+        if twilio_auth_token and not twilio_account_sid:
+            raise RuntimeError(
+                "Bot Twilio config is incomplete: twilio_auth_token is set but twilio_account_sid is missing."
+            )
+
         if twilio_account_sid and twilio_auth_token:
             if TwilioClient is None:
                 raise RuntimeError("twilio package is not available in runtime")

@@ -593,10 +593,11 @@ class CustomFunctionsService:
                     twilio_messaging_service_sid = bot_context.get("twilio_messaging_service_sid") or self.twilio_messaging_service_sid
 
                     logger.info(
-                        "Attempting to send WhatsApp to %s from %s (account_sid=%s, messaging_service_sid=%s)",
+                        "Attempting to send WhatsApp to %s from %s (account_sid=%s, has_auth_token=%s, messaging_service_sid=%s)",
                         target_phone,
                         from_number,
                         twilio_account_sid or "ENV_DEFAULT",
+                        "yes" if twilio_auth_token else "no",
                         twilio_messaging_service_sid or "NONE",
                     )
                     

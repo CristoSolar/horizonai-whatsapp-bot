@@ -110,6 +110,24 @@ Crea un archivo `.env` en la raíz basado en `.env.example` y completa las crede
 - **Horizon**: `HORIZON_BASE_URL`, `HORIZON_API_KEY`
 - **Base de datos Horizon (opcional para carga dinámica)**: `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` o bien `DATABASE_URL` completa.
 
+### Conexión DB vía SSH Tunnel (red privada de Manager)
+
+Si la base del Manager solo es accesible desde su red de contenedores, puedes exponerla localmente con túnel SSH y apuntar el bot a ese puerto:
+
+```bash
+ssh -N -L 55432:<DB_HOST_INTERNO_MANAGER>:5432 <usuario>@<host_manager>
+```
+
+Luego, en `.env` del bot (contenedor `web`):
+
+```bash
+DATABASE_URL=postgresql+psycopg2://<db_user>:<db_pass>@host.docker.internal:55432/<db_name>?sslmode=disable
+```
+
+Notas:
+- `docker-compose.yml` ya incluye `host.docker.internal:host-gateway` para Linux.
+- Si no defines `DATABASE_URL`, el servicio ahora arma la URL automáticamente usando `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`.
+
 ## Puesta en marcha con Docker
 
 ```bash

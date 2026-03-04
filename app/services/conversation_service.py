@@ -73,6 +73,27 @@ def handle_incoming_message(
     if not bot:
         raise NotFound(f"Bot '{bot_id}' not found")
 
+    # Enrich Redis snapshot with SQL source-of-truth when key fields are missing
+    needs_enrichment = not bot.get("client_id") or not bot.get("metadata") or not bot.get("twilio_account_sid")
+    if needs_enrichment:
+        try:
+            engine = db_extension.engine
+            sql_repo = SQLBotRepository(engine)
+            sql_bot = sql_repo.get(bot_id)
+            if sql_bot:
+                enriched_updates = {
+                    "client_id": sql_bot.get("client_id"),
+                    "metadata": sql_bot.get("metadata") or bot.get("metadata") or {},
+                    "twilio_account_sid": sql_bot.get("twilio_account_sid") or bot.get("twilio_account_sid"),
+                    "twilio_messaging_service_sid": sql_bot.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid"),
+                }
+                updated = repository.update_bot(bot_id, enriched_updates)
+                if updated:
+                    bot = updated
+                    logger.info("🔄 Bot enriched from SQL: client_id=%s", bot.get("client_id"))
+        except Exception:
+            pass
+
     # Initialize client data manager (namespaced per bot)
     logger.info(f"🗃️ Initializing client data manager...")
     client_data_manager = ClientDataManager(redis_extension.client, namespace=bot_id)
@@ -240,13 +261,53 @@ def _resolve_twilio_auth_token_from_metadata(bot_metadata: Dict[str, Any]) -> Op
     return resolved or None
 
 
+def _resolve_tenant_twilio_field(tenant_candidates: List[str], field_name: str) -> Optional[str]:
+    for tenant_id in tenant_candidates:
+        try:
+            value = redis_extension.client.hget(f"tenant:twilio:{tenant_id}", field_name)
+            if value:
+                if isinstance(value, bytes):
+                    return value.decode("utf-8")
+                return str(value)
+        except Exception:
+            continue
+    return None
+
+
 def _resolve_bot_twilio_credentials(bot: Dict[str, Any]) -> Dict[str, Optional[str]]:
     metadata = bot.get("metadata") or {}
+    tenant_candidates: List[str] = []
+    for candidate in [metadata.get("tenant_id"), bot.get("client_id"), bot.get("id")]:
+        if candidate and str(candidate) not in tenant_candidates:
+            tenant_candidates.append(str(candidate))
+
+    token_from_metadata = _resolve_twilio_auth_token_from_metadata(metadata)
+    token_ref = metadata.get("twilio_auth_token_ref")
+    token_from_ref = None
+    if token_ref:
+        token_map = current_app.config.get("TWILIO_AUTH_TOKEN_REFS") or {}
+        token_from_ref = token_map.get(token_ref)
+
+    token_from_tenant = _resolve_tenant_twilio_field(tenant_candidates, "twilio_auth_token")
+
     return {
-        "twilio_account_sid": metadata.get("twilio_account_sid") or bot.get("twilio_account_sid"),
-        "twilio_auth_token": _resolve_twilio_auth_token_from_metadata(metadata),
-        "twilio_messaging_service_sid": metadata.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid"),
-        "twilio_from_whatsapp": metadata.get("twilio_from_whatsapp") or bot.get("twilio_phone_number"),
+        "twilio_account_sid": (
+            metadata.get("twilio_account_sid")
+            or bot.get("twilio_account_sid")
+            or _resolve_tenant_twilio_field(tenant_candidates, "twilio_account_sid")
+        ),
+        "twilio_auth_token": token_from_metadata or token_from_ref or token_from_tenant,
+        "twilio_messaging_service_sid": (
+            metadata.get("twilio_messaging_service_sid")
+            or bot.get("twilio_messaging_service_sid")
+            or _resolve_tenant_twilio_field(tenant_candidates, "twilio_messaging_service_sid")
+        ),
+        "twilio_from_whatsapp": (
+            metadata.get("twilio_from_whatsapp")
+            or _resolve_tenant_twilio_field(tenant_candidates, "twilio_from_whatsapp")
+            or bot.get("twilio_phone_number")
+        ),
+        "tenant_id": tenant_candidates[0] if tenant_candidates else None,
     }
 
 
@@ -321,6 +382,7 @@ def _execute_tool_calls(
                 "bot_id": bot.get("id"),
                 "twilio_phone_number": bot.get("twilio_phone_number"),
                 "user_number": user_number,
+                "tenant_id": twilio_credentials.get("tenant_id"),
                 "twilio_account_sid": twilio_credentials.get("twilio_account_sid"),
                 "twilio_auth_token": twilio_credentials.get("twilio_auth_token"),
                 "twilio_messaging_service_sid": twilio_credentials.get("twilio_messaging_service_sid"),
@@ -419,6 +481,7 @@ def _try_auto_dispatch_bateriasya_lead(
             "bot_id": bot.get("id"),
             "twilio_phone_number": bot.get("twilio_phone_number"),
             "user_number": user_number,
+            "tenant_id": twilio_credentials.get("tenant_id"),
             "twilio_account_sid": twilio_credentials.get("twilio_account_sid"),
             "twilio_auth_token": twilio_credentials.get("twilio_auth_token"),
             "twilio_messaging_service_sid": twilio_credentials.get("twilio_messaging_service_sid"),

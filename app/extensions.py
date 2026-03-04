@@ -188,16 +188,8 @@ class DatabaseExtension:
     def init_app(self, app: Flask) -> None:
         if self._engine is not None:
             return
-        # Determine URL
         config_obj = app.config
-        url = None
-        # Support config object property
-        if hasattr(config_obj, "SQLALCHEMY_URL"):
-            try:
-                url = config_obj.SQLALCHEMY_URL  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover
-                url = None
-        url = url or config_obj.get("DATABASE_URL")
+        url = self._resolve_database_url(config_obj)
         if not url:
             logger.warning("DATABASE_URL not configured; DB features disabled")
             app.extensions["db_extension"] = self
@@ -205,6 +197,28 @@ class DatabaseExtension:
         self._engine = create_engine(url, pool_pre_ping=True, future=True)
         app.extensions["db_extension"] = self
         logger.info("Database engine initialized")
+
+    @staticmethod
+    def _resolve_database_url(config_obj) -> Optional[str]:
+        url = config_obj.get("DATABASE_URL")
+        if url:
+            return url
+
+        host = config_obj.get("DB_HOST")
+        user = config_obj.get("DB_USER")
+        password = config_obj.get("DB_PASSWORD")
+        db_name = config_obj.get("DB_NAME")
+        port = config_obj.get("DB_PORT") or "5432"
+        sslmode = config_obj.get("DB_SSL_MODE") or "prefer"
+        driver = config_obj.get("DB_DRIVER")
+        if not driver:
+            driver = "mysql+pymysql" if str(port) == "3306" else "postgresql+psycopg2"
+
+        if host and user and db_name:
+            pwd = password or ""
+            return f"{driver}://{user}:{pwd}@{host}:{port}/{db_name}?sslmode={sslmode}"
+
+        return None
 
     @property
     def engine(self) -> Engine:

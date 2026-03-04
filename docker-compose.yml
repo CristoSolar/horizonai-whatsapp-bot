@@ -6,10 +6,15 @@ services:
       - .env
     environment:
       FLASK_ENV: development
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${HOST_WEB_PORT:-8001}:8000"
     depends_on:
       - redis
+    networks:
+      - default
+      - manager_internal
     restart: unless-stopped
 
   redis:
@@ -22,3 +27,8 @@ services:
 
 volumes:
   redis-data:
+
+networks:
+  manager_internal:
+    external: true
+    name: horizonaimanager_horizonai-internal
