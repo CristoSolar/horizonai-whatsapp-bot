@@ -330,6 +330,42 @@ def _resolve_twilio_from_gestion_empresa(*, client_id: Optional[Any], whatsapp_n
         return {}
 
 
+def _resolve_horizon_token_for_bot(bot: Dict[str, Any]) -> Optional[str]:
+    metadata = bot.get("metadata") or {}
+    if metadata.get("horizon_api_token"):
+        return metadata.get("horizon_api_token")
+
+    client_id = bot.get("client_id") or metadata.get("client_id")
+    if not client_id:
+        return current_app.config.get("HORIZON_API_KEY")
+
+    try:
+        engine = db_extension.engine
+    except Exception:
+        return current_app.config.get("HORIZON_API_KEY")
+
+    query = text(
+        """
+        SELECT `key` AS token_key
+        FROM api_apitoken
+        WHERE empresa_id = :empresa_id
+          AND activo = 1
+        ORDER BY ultimo_uso DESC, creado_en DESC
+        LIMIT 1
+        """
+    )
+
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(query, {"empresa_id": client_id}).mappings().first()
+            if row and row.get("token_key"):
+                return str(row.get("token_key"))
+    except Exception as exc:
+        logger.warning("Could not resolve Horizon token from api_apitoken for empresa_id=%s: %s", client_id, exc)
+
+    return current_app.config.get("HORIZON_API_KEY")
+
+
 def _resolve_bot_twilio_credentials(bot: Dict[str, Any]) -> Dict[str, Optional[str]]:
     metadata = bot.get("metadata") or {}
     tenant_candidates: List[str] = []
@@ -411,7 +447,7 @@ def _execute_tool_calls(
     
     # Get bot-specific configuration from metadata
     bot_metadata = bot.get("metadata") or {}
-    horizon_api_token = bot_metadata.get("horizon_api_token") or current_app.config.get("HORIZON_API_KEY")
+    horizon_api_token = _resolve_horizon_token_for_bot(bot)
     # Override token for specific assistant if provided (per user request)
     try:
         assistant_id = bot.get("assistant_id")
@@ -419,7 +455,7 @@ def _execute_tool_calls(
             # Token provisto por el cliente para este asistente
             "asst_1CYCRroCYaf2oeOWU7KGsih9": "f2W3tldUJqnkABs9ndT1pfMWYDF0AXTjPk0HVtyz5iX1TO8mEit8qyXO952eqxUR",
         }
-        if assistant_id in per_assistant_tokens:
+        if assistant_id in per_assistant_tokens and not horizon_api_token:
             horizon_api_token = per_assistant_tokens[assistant_id]
     except Exception:
         pass
@@ -501,7 +537,7 @@ def _try_auto_dispatch_bateriasya_lead(
         twilio_service = TwilioMessagingService(twilio_extension) if twilio_extension else None
         twilio_credentials = _resolve_bot_twilio_credentials(bot)
         bot_metadata = bot.get("metadata") or {}
-        horizon_api_token = bot_metadata.get("horizon_api_token") or current_app.config.get("HORIZON_API_KEY")
+        horizon_api_token = _resolve_horizon_token_for_bot(bot)
         twilio_template_sid = bot_metadata.get("twilio_template_sid")
         twilio_messaging_service_sid = bot_metadata.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid")
         sucursal_phone_map = bot_metadata.get("sucursal_phone_map") or {}
