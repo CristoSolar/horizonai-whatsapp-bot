@@ -524,11 +524,19 @@ def _try_auto_dispatch_bateriasya_lead(
         return
 
     if client_data.get("notification_sent"):
+        logger.info("⏭️ Auto-dispatch omitido: ya existe notification_sent para %s", user_number)
         return
 
-    required_fields = ["comuna", "marca", "modelo", "año", "combustible", "start_stop", "nombre", "telefono"]
-    missing = [field for field in required_fields if not client_data.get(field)]
+    enriched_client_data = dict(client_data or {})
+    if not enriched_client_data.get("telefono") and user_number:
+        enriched_client_data["telefono"] = user_number
+        client_data_manager.update_client_data(user_number, "telefono", user_number)
+        logger.info("📞 Auto-dispatch: teléfono completado desde user_number=%s", user_number)
+
+    required_fields = ["comuna", "marca", "modelo", "año", "combustible", "start_stop", "telefono"]
+    missing = [field for field in required_fields if not enriched_client_data.get(field)]
     if missing:
+        logger.info("⏭️ Auto-dispatch omitido para %s: faltan campos %s", user_number, missing)
         return
 
     try:
@@ -552,30 +560,30 @@ def _try_auto_dispatch_bateriasya_lead(
             sucursal_phone_map=sucursal_phone_map,
         )
 
-        full_name = str(client_data.get("nombre", "")).strip()
+        full_name = str(enriched_client_data.get("nombre", "")).strip()
         name_parts = [part for part in full_name.split() if part]
-        first_name = name_parts[0] if name_parts else ""
+        first_name = name_parts[0] if name_parts else "Cliente"
         last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
 
         payload = {
             "servicio": {
-                "comuna": client_data.get("comuna"),
+                "comuna": enriched_client_data.get("comuna"),
             },
             "vehiculo": {
-                "marca": client_data.get("marca"),
-                "modelo": client_data.get("modelo"),
-                "anio": int(client_data.get("año")) if str(client_data.get("año", "")).isdigit() else client_data.get("año"),
-                "combustible": str(client_data.get("combustible", "")).lower().replace("é", "e"),
-                "start_stop": "si" if str(client_data.get("start_stop", "")).lower() in {"sí", "si", "true", "1"} else "no",
+                "marca": enriched_client_data.get("marca"),
+                "modelo": enriched_client_data.get("modelo"),
+                "anio": int(enriched_client_data.get("año")) if str(enriched_client_data.get("año", "")).isdigit() else enriched_client_data.get("año"),
+                "combustible": str(enriched_client_data.get("combustible", "")).lower().replace("é", "e"),
+                "start_stop": "si" if str(enriched_client_data.get("start_stop", "")).lower() in {"sí", "si", "true", "1"} else "no",
             },
             "cliente": {
                 "nombre": first_name,
                 "apellido": last_name,
-                "rut": client_data.get("rut", "N/A"),
-                "direccion": client_data.get("direccion", "N/A"),
-                "referencia": client_data.get("referencia", "N/A"),
-                "telefono": client_data.get("telefono"),
-                "correo": client_data.get("correo", "sin-correo@pendiente.cl"),
+                "rut": enriched_client_data.get("rut", "N/A"),
+                "direccion": enriched_client_data.get("direccion", "N/A"),
+                "referencia": enriched_client_data.get("referencia", "N/A"),
+                "telefono": enriched_client_data.get("telefono"),
+                "correo": enriched_client_data.get("correo", "sin-correo@pendiente.cl"),
             },
             "estado_flujo": "agendando",
         }
