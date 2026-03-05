@@ -27,15 +27,7 @@ class CustomFunctionsService:
         self.horizon_api_base = "https://api.horizonai.cl"
         self.twilio_template_sid = twilio_template_sid
         self.twilio_messaging_service_sid = twilio_messaging_service_sid
-        self.sucursal_phone_map = sucursal_phone_map or {
-            "santiago": "+56978493528",
-            "rm": "+56978493528",
-            "región metropolitana": "+56978493528",
-            "curico": "+56978493528",
-            "curicó": "+56978493528",
-            "macul": "+56978493528",
-            "la florida": "+56978493528",
-        }
+        self.sucursal_phone_map = sucursal_phone_map if sucursal_phone_map is not None else {}
         # Defaults for agenda logic
         self.slot_minutes_default = 60
         self.max_slots_per_vendedor = 5
@@ -172,6 +164,10 @@ class CustomFunctionsService:
             or vendedor.get("phone")
             or vendedor.get("celular")
             or vendedor.get("mobile")
+            or vendedor.get("telefono_movil")
+            or vendedor.get("telefono1")
+            or vendedor.get("telefono_1")
+            or vendedor.get("phone_number")
             or vendedor.get("whatsapp")
         )
         if phone:
@@ -185,11 +181,27 @@ class CustomFunctionsService:
                 or user_payload.get("phone")
                 or user_payload.get("celular")
                 or user_payload.get("mobile")
+                or user_payload.get("telefono_movil")
+                or user_payload.get("telefono1")
+                or user_payload.get("telefono_1")
+                or user_payload.get("phone_number")
                 or user_payload.get("whatsapp")
             )
             if nested_phone:
                 return self._normalize_phone_number(nested_phone)
         return None
+
+    def _resolve_fallback_phone(self, comuna: Any) -> Optional[str]:
+        if not self.sucursal_phone_map:
+            return None
+
+        comuna_text = str(comuna or "").strip().lower()
+        for key, phone in self.sucursal_phone_map.items():
+            if key and key.lower() in comuna_text:
+                return self._normalize_phone_number(phone)
+
+        first_phone = next(iter(self.sucursal_phone_map.values()), None)
+        return self._normalize_phone_number(first_phone)
 
     def _get_vendedor_phone(self, vendedor_ref: Any, token: Optional[str] = None) -> Optional[str]:
         """Obtiene el teléfono del vendedor asignado aceptando id, username o payload."""
@@ -225,12 +237,18 @@ class CustomFunctionsService:
             for vendedor in vendedores:
                 if not isinstance(vendedor, dict):
                     continue
+
+                user_payload = vendedor.get("user")
+                nested_username = user_payload.get("username") if isinstance(user_payload, dict) else None
+                nested_user_id = user_payload.get("id") if isinstance(user_payload, dict) else None
+
                 candidates = [
                     vendedor.get("id"),
                     vendedor.get("pk"),
                     vendedor.get("vendedor_id"),
                     vendedor.get("username"),
-                    vendedor.get("user"),
+                    nested_username,
+                    nested_user_id,
                 ]
                 if any(str(candidate).strip().lower() == ref_text for candidate in candidates if candidate is not None):
                     phone = self._extract_phone_from_vendedor(vendedor)
@@ -684,50 +702,23 @@ class CustomFunctionsService:
                         
                         if not target_phone:
                             logger.warning(f"No se pudo obtener teléfono del vendedor {vendedor_ref}, usando fallback por sucursal")
-                            # Fallback to sucursal mapping
-                            comuna = servicio.get("comuna", "").lower()
-                            for key, phone in self.sucursal_phone_map.items():
-                                if key in comuna:
-                                    target_phone = phone
-                                    break
-                            if not target_phone:
-                                target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
+                            target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
                     else:
                         logger.warning("Lead creado sin vendedor asignado, usando fallback por sucursal")
-                        # Fallback to sucursal mapping
-                        comuna = servicio.get("comuna", "").lower()
-                        for key, phone in self.sucursal_phone_map.items():
-                            if key in comuna:
-                                target_phone = phone
-                                break
-                        if not target_phone:
-                            target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
+                        target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
                 else:
                     lead_creation_error = "No se pudo crear el lead en Horizon"
                     logger.warning(lead_creation_error)
-                    # Use fallback for phone
-                    comuna = servicio.get("comuna", "").lower()
-                    for key, phone in self.sucursal_phone_map.items():
-                        if key in comuna:
-                            target_phone = phone
-                            break
-                    if not target_phone:
-                        target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
+                    target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
             else:
                 # No cliente data, use fallback
                 logger.info("Datos de cliente incompletos, usando fallback por sucursal")
-                comuna = servicio.get("comuna", "").lower()
-                for key, phone in self.sucursal_phone_map.items():
-                    if key in comuna:
-                        target_phone = phone
-                        break
-                if not target_phone:
-                    target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
+                target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
             
             # Send WhatsApp message to sucursal
             whatsapp_sent = False
             message_sid = None
-            if self.twilio_service:
+            if self.twilio_service and target_phone:
                 try:
                     from_number = bot_context.get("twilio_from_whatsapp") or bot_context.get("twilio_phone_number")
                     twilio_account_sid = bot_context.get("twilio_account_sid")
@@ -791,6 +782,8 @@ class CustomFunctionsService:
                     logger.error(f"Error sending WhatsApp notification: {e}")
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
+            elif self.twilio_service and not target_phone:
+                logger.warning("No se envió WhatsApp: no se pudo resolver teléfono destino (vendedor/sucursal)")
             
             # Build response
             response = {
