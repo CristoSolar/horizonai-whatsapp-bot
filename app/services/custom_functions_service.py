@@ -152,6 +152,99 @@ class CustomFunctionsService:
             logger.error(f"Error listando vendedores: {e}")
             return {"success": False, "error": "No se pudo obtener la lista de vendedores"}
 
+    @staticmethod
+    def _normalize_phone_number(phone: Any) -> Optional[str]:
+        if not phone:
+            return None
+        normalized = str(phone).strip()
+        if not normalized:
+            return None
+        if not normalized.startswith("+"):
+            if normalized.startswith("56"):
+                normalized = f"+{normalized}"
+            elif normalized.startswith("9") and len(normalized) == 9:
+                normalized = f"+56{normalized}"
+        return normalized
+
+    def _extract_phone_from_vendedor(self, vendedor: Dict[str, Any]) -> Optional[str]:
+        phone = (
+            vendedor.get("telefono")
+            or vendedor.get("phone")
+            or vendedor.get("celular")
+            or vendedor.get("mobile")
+            or vendedor.get("whatsapp")
+        )
+        if phone:
+            return self._normalize_phone_number(phone)
+
+        # Algunos esquemas retornan datos anidados en user/usuario
+        user_payload = vendedor.get("user") or vendedor.get("usuario")
+        if isinstance(user_payload, dict):
+            nested_phone = (
+                user_payload.get("telefono")
+                or user_payload.get("phone")
+                or user_payload.get("celular")
+                or user_payload.get("mobile")
+                or user_payload.get("whatsapp")
+            )
+            if nested_phone:
+                return self._normalize_phone_number(nested_phone)
+        return None
+
+    def _get_vendedor_phone(self, vendedor_ref: Any, token: Optional[str] = None) -> Optional[str]:
+        """Obtiene el teléfono del vendedor asignado aceptando id, username o payload."""
+        try:
+            # Si ya viene payload del vendedor en el lead
+            if isinstance(vendedor_ref, dict):
+                phone = self._extract_phone_from_vendedor(vendedor_ref)
+                if phone:
+                    logger.info("Teléfono encontrado directamente en payload de vendedor")
+                    return phone
+                vendedor_ref = (
+                    vendedor_ref.get("id")
+                    or vendedor_ref.get("pk")
+                    or vendedor_ref.get("vendedor_id")
+                    or vendedor_ref.get("username")
+                )
+
+            if not vendedor_ref:
+                return None
+
+            # Intento directo por detalle /api/vendedores/{id}/
+            if isinstance(vendedor_ref, int) or (isinstance(vendedor_ref, str) and vendedor_ref.isdigit()):
+                vendedor = self._api_get(f"/api/vendedores/{vendedor_ref}/", token_override=token)
+                phone = self._extract_phone_from_vendedor(vendedor if isinstance(vendedor, dict) else {})
+                if phone:
+                    logger.info(f"Teléfono encontrado para vendedor {vendedor_ref}: {phone}")
+                    return phone
+
+            # Fallback por listado (útil cuando vendedor_ref es username)
+            data = self._api_get("/api/vendedores/", token_override=token)
+            vendedores = data if isinstance(data, list) else data.get("results", [])
+            ref_text = str(vendedor_ref).strip().lower()
+            for vendedor in vendedores:
+                if not isinstance(vendedor, dict):
+                    continue
+                candidates = [
+                    vendedor.get("id"),
+                    vendedor.get("pk"),
+                    vendedor.get("vendedor_id"),
+                    vendedor.get("username"),
+                    vendedor.get("user"),
+                ]
+                if any(str(candidate).strip().lower() == ref_text for candidate in candidates if candidate is not None):
+                    phone = self._extract_phone_from_vendedor(vendedor)
+                    if phone:
+                        logger.info(f"Teléfono encontrado para vendedor {vendedor_ref}: {phone}")
+                        return phone
+
+            logger.warning(f"No se encontró teléfono para vendedor {vendedor_ref}")
+            return None
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error obteniendo teléfono del vendedor {vendedor_ref}: {e}")
+            return None
+
     # ----------------------------
     # buscar_disponibilidad
     # ----------------------------
@@ -505,19 +598,9 @@ class CustomFunctionsService:
             cliente = arguments.get("cliente", {})
             estado_flujo = arguments.get("estado_flujo", "pre_cotizacion")
             
-            # Determine target phone based on comuna (sucursal)
-            comuna = servicio.get("comuna", "").lower()
-            
-            # Use bot-specific phone mapping
+            # Target phone will be determined from lead's assigned vendedor
             target_phone = None
-            for key, phone in self.sucursal_phone_map.items():
-                if key in comuna:
-                    target_phone = phone
-                    break
-            
-            if not target_phone:
-                # Default to first phone in map or fallback
-                target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
+            vendedor_id = None
             
             # Format message with extracted data
             message_parts = [
@@ -557,6 +640,8 @@ class CustomFunctionsService:
             # Create lead in Horizon if cliente data is available
             lead_id = None
             lead_creation_error = None
+            lead_data = None
+            
             if cliente and cliente.get("nombre") and cliente.get("correo") and cliente.get("telefono"):
                 # Format vehicle info for mensaje field
                 vehiculo_info = f"Vehículo: {vehiculo.get('marca', 'N/A')} {vehiculo.get('modelo', 'N/A')} {vehiculo.get('anio', 'N/A')} - Combustible: {vehiculo.get('combustible', 'N/A')}, Start-Stop: {vehiculo.get('start_stop', 'N/A')}"
@@ -578,9 +663,66 @@ class CustomFunctionsService:
                     # Save lead ID to Redis for future updates
                     self._save_lead_id_to_redis(cliente.get("telefono", ""), lead_id)
                     logger.info(f"Lead created successfully: ID={lead_id}")
+                    
+                    # Get vendedor assigned to the lead
+                    vendedor_ref = (
+                        lead_data.get("vendedor_id")
+                        or lead_data.get("vendedor")
+                        or lead_data.get("assigned_to")
+                        or lead_data.get("usuario_asignado_id")
+                        or lead_data.get("vendedor_username")
+                    )
+                    if isinstance(vendedor_ref, dict):
+                        vendedor_id = vendedor_ref.get("id") or vendedor_ref.get("pk") or vendedor_ref.get("vendedor_id")
+                    else:
+                        vendedor_id = vendedor_ref
+
+                    if vendedor_ref:
+                        logger.info(f"Lead asignado a vendedor: {vendedor_ref}")
+                        # Get vendedor's phone number
+                        target_phone = self._get_vendedor_phone(vendedor_ref, token=self.horizon_api_token)
+                        
+                        if not target_phone:
+                            logger.warning(f"No se pudo obtener teléfono del vendedor {vendedor_ref}, usando fallback por sucursal")
+                            # Fallback to sucursal mapping
+                            comuna = servicio.get("comuna", "").lower()
+                            for key, phone in self.sucursal_phone_map.items():
+                                if key in comuna:
+                                    target_phone = phone
+                                    break
+                            if not target_phone:
+                                target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
+                    else:
+                        logger.warning("Lead creado sin vendedor asignado, usando fallback por sucursal")
+                        # Fallback to sucursal mapping
+                        comuna = servicio.get("comuna", "").lower()
+                        for key, phone in self.sucursal_phone_map.items():
+                            if key in comuna:
+                                target_phone = phone
+                                break
+                        if not target_phone:
+                            target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
                 else:
                     lead_creation_error = "No se pudo crear el lead en Horizon"
                     logger.warning(lead_creation_error)
+                    # Use fallback for phone
+                    comuna = servicio.get("comuna", "").lower()
+                    for key, phone in self.sucursal_phone_map.items():
+                        if key in comuna:
+                            target_phone = phone
+                            break
+                    if not target_phone:
+                        target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
+            else:
+                # No cliente data, use fallback
+                logger.info("Datos de cliente incompletos, usando fallback por sucursal")
+                comuna = servicio.get("comuna", "").lower()
+                for key, phone in self.sucursal_phone_map.items():
+                    if key in comuna:
+                        target_phone = phone
+                        break
+                if not target_phone:
+                    target_phone = next(iter(self.sucursal_phone_map.values())) if self.sucursal_phone_map else "+56978493528"
             
             # Send WhatsApp message to sucursal
             whatsapp_sent = False
@@ -663,8 +805,12 @@ class CustomFunctionsService:
             
             # Add WhatsApp info
             if whatsapp_sent:
-                response["message"] = "Datos extraídos, notificación enviada a sucursal"
+                if vendedor_id:
+                    response["message"] = f"Datos extraídos, notificación enviada al vendedor (ID: {vendedor_id})"
+                else:
+                    response["message"] = "Datos extraídos, notificación enviada a sucursal"
                 response["target_phone"] = target_phone
+                response["vendedor_id"] = vendedor_id
                 response["message_sid"] = message_sid
             else:
                 response["message"] = "Datos extraídos (notificación WhatsApp no enviada)"
