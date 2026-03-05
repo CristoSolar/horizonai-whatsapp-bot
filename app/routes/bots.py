@@ -58,6 +58,7 @@ def create_bot() -> Response:
         )
 
     bot_data: Dict[str, Any] = {
+        "client_id": payload.get("client_id"),
         "name": payload["name"],
         "instructions": payload.get("instructions")
         or (assistant_response or {}).get("instructions"),
@@ -68,6 +69,8 @@ def create_bot() -> Response:
         "horizon_actions": payload.get("horizon_actions") or [],
         "metadata": payload.get("metadata") or {},
         "twilio_phone_number": payload.get("twilio_phone_number"),
+        "twilio_account_sid": payload.get("twilio_account_sid"),
+        "twilio_messaging_service_sid": payload.get("twilio_messaging_service_sid"),
     }
 
     repository = _get_repository()

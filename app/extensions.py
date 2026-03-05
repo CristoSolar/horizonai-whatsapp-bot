@@ -216,7 +216,10 @@ class DatabaseExtension:
 
         if host and user and db_name:
             pwd = password or ""
-            return f"{driver}://{user}:{pwd}@{host}:{port}/{db_name}?sslmode={sslmode}"
+            base_url = f"{driver}://{user}:{pwd}@{host}:{port}/{db_name}"
+            if driver.startswith("postgresql"):
+                return f"{base_url}?sslmode={sslmode}"
+            return base_url
 
         return None
 

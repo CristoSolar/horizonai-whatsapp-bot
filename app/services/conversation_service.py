@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, Iterable, List, Optional
 
 from flask import current_app
+from sqlalchemy import text
 from werkzeug.exceptions import BadRequest, NotFound
 
 from ..extensions import redis_extension
@@ -274,6 +275,61 @@ def _resolve_tenant_twilio_field(tenant_candidates: List[str], field_name: str) 
     return None
 
 
+def _normalize_whatsapp_number(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = str(value).strip().replace("whatsapp:", "")
+    return normalized
+
+
+def _resolve_twilio_from_gestion_empresa(*, client_id: Optional[Any], whatsapp_number: Optional[str]) -> Dict[str, Optional[str]]:
+    try:
+        engine = db_extension.engine
+    except Exception:
+        return {}
+
+    query_by_client = text(
+        """
+        SELECT id, twilio_whatsapp_from, twilio_account_sid, twilio_auth_token
+        FROM gestion_empresa
+        WHERE id = :client_id
+        LIMIT 1
+        """
+    )
+    query_by_number = text(
+        """
+        SELECT id, twilio_whatsapp_from, twilio_account_sid, twilio_auth_token
+        FROM gestion_empresa
+        WHERE REPLACE(twilio_whatsapp_from, 'whatsapp:', '') = :number
+           OR twilio_whatsapp_from = :number
+        LIMIT 1
+        """
+    )
+
+    try:
+        with engine.connect() as conn:
+            row = None
+            if client_id is not None and str(client_id).strip() != "":
+                row = conn.execute(query_by_client, {"client_id": client_id}).mappings().first()
+
+            normalized_number = _normalize_whatsapp_number(whatsapp_number)
+            if row is None and normalized_number:
+                row = conn.execute(query_by_number, {"number": normalized_number}).mappings().first()
+
+            if not row:
+                return {}
+
+            return {
+                "client_id": str(row.get("id")) if row.get("id") is not None else None,
+                "twilio_from_whatsapp": row.get("twilio_whatsapp_from"),
+                "twilio_account_sid": row.get("twilio_account_sid"),
+                "twilio_auth_token": row.get("twilio_auth_token"),
+            }
+    except Exception as exc:
+        logger.warning("Could not resolve Twilio credentials from gestion_empresa: %s", exc)
+        return {}
+
+
 def _resolve_bot_twilio_credentials(bot: Dict[str, Any]) -> Dict[str, Optional[str]]:
     metadata = bot.get("metadata") or {}
     tenant_candidates: List[str] = []
@@ -290,13 +346,21 @@ def _resolve_bot_twilio_credentials(bot: Dict[str, Any]) -> Dict[str, Optional[s
 
     token_from_tenant = _resolve_tenant_twilio_field(tenant_candidates, "twilio_auth_token")
 
+    company_twilio = _resolve_twilio_from_gestion_empresa(
+        client_id=bot.get("client_id") or metadata.get("client_id"),
+        whatsapp_number=metadata.get("twilio_from_whatsapp") or bot.get("twilio_phone_number"),
+    )
+
+    resolved_client_id = bot.get("client_id") or metadata.get("client_id") or company_twilio.get("client_id")
+
     return {
         "twilio_account_sid": (
             metadata.get("twilio_account_sid")
             or bot.get("twilio_account_sid")
+            or company_twilio.get("twilio_account_sid")
             or _resolve_tenant_twilio_field(tenant_candidates, "twilio_account_sid")
         ),
-        "twilio_auth_token": token_from_metadata or token_from_ref or token_from_tenant,
+        "twilio_auth_token": token_from_metadata or token_from_ref or token_from_tenant or company_twilio.get("twilio_auth_token"),
         "twilio_messaging_service_sid": (
             metadata.get("twilio_messaging_service_sid")
             or bot.get("twilio_messaging_service_sid")
@@ -304,10 +368,11 @@ def _resolve_bot_twilio_credentials(bot: Dict[str, Any]) -> Dict[str, Optional[s
         ),
         "twilio_from_whatsapp": (
             metadata.get("twilio_from_whatsapp")
+            or company_twilio.get("twilio_from_whatsapp")
             or _resolve_tenant_twilio_field(tenant_candidates, "twilio_from_whatsapp")
             or bot.get("twilio_phone_number")
         ),
-        "tenant_id": tenant_candidates[0] if tenant_candidates else None,
+        "tenant_id": str(resolved_client_id) if resolved_client_id is not None else (tenant_candidates[0] if tenant_candidates else None),
     }
 
 
