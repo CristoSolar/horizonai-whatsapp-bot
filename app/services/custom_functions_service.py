@@ -558,6 +558,43 @@ class CustomFunctionsService:
             if hasattr(e, 'response') and e.response is not None:
                 logger.error(f"Response: {e.response.text}")
             return None
+
+    def _get_horizon_lead(self, lead_id: Any) -> Optional[Dict[str, Any]]:
+        try:
+            lead_value = str(lead_id).strip()
+            if not lead_value:
+                return None
+            return self._api_get(f"/api/leads/{lead_value}/")
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"No se pudo consultar detalle del lead {lead_id}: {e}")
+            return None
+
+    @staticmethod
+    def _extract_vendedor_ref_from_lead(lead_payload: Optional[Dict[str, Any]]) -> Any:
+        if not isinstance(lead_payload, dict):
+            return None
+
+        candidates = [
+            lead_payload.get("vendedor_id"),
+            lead_payload.get("vendedor"),
+            lead_payload.get("assigned_to"),
+            lead_payload.get("usuario_asignado_id"),
+            lead_payload.get("vendedor_username"),
+            lead_payload.get("usuario_asignado"),
+            lead_payload.get("vendedor_asignado"),
+            lead_payload.get("assigned_user"),
+            lead_payload.get("usuario"),
+        ]
+        for candidate in candidates:
+            if candidate:
+                return candidate
+        return None
+
+    @staticmethod
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "si", "sí", "on"}
     
     def _save_lead_id_to_redis(self, phone_number: str, lead_id: int) -> bool:
         """Save lead ID to Redis for future reference."""
@@ -615,6 +652,7 @@ class CustomFunctionsService:
             vehiculo = arguments.get("vehiculo", {})
             cliente = arguments.get("cliente", {})
             estado_flujo = arguments.get("estado_flujo", "pre_cotizacion")
+            allow_sucursal_fallback = self._as_bool(bot_context.get("allow_sucursal_fallback"))
             
             # Target phone will be determined from lead's assigned vendedor
             target_phone = None
@@ -681,17 +719,22 @@ class CustomFunctionsService:
                     # Save lead ID to Redis for future updates
                     self._save_lead_id_to_redis(cliente.get("telefono", ""), lead_id)
                     logger.info(f"Lead created successfully: ID={lead_id}")
+
+                    lead_detail = self._get_horizon_lead(lead_id)
+                    if isinstance(lead_detail, dict):
+                        lead_data = lead_detail
+                        logger.info(f"Lead detail fetched for ID={lead_id}")
                     
                     # Get vendedor assigned to the lead
-                    vendedor_ref = (
-                        lead_data.get("vendedor_id")
-                        or lead_data.get("vendedor")
-                        or lead_data.get("assigned_to")
-                        or lead_data.get("usuario_asignado_id")
-                        or lead_data.get("vendedor_username")
-                    )
+                    vendedor_ref = self._extract_vendedor_ref_from_lead(lead_data)
                     if isinstance(vendedor_ref, dict):
-                        vendedor_id = vendedor_ref.get("id") or vendedor_ref.get("pk") or vendedor_ref.get("vendedor_id")
+                        vendedor_id = (
+                            vendedor_ref.get("id")
+                            or vendedor_ref.get("pk")
+                            or vendedor_ref.get("vendedor_id")
+                            or vendedor_ref.get("usuario_id")
+                            or vendedor_ref.get("username")
+                        )
                     else:
                         vendedor_id = vendedor_ref
 
@@ -701,19 +744,25 @@ class CustomFunctionsService:
                         target_phone = self._get_vendedor_phone(vendedor_ref, token=self.horizon_api_token)
                         
                         if not target_phone:
-                            logger.warning(f"No se pudo obtener teléfono del vendedor {vendedor_ref}, usando fallback por sucursal")
-                            target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
+                            logger.warning(f"No se pudo obtener teléfono del vendedor {vendedor_ref}")
+                            if allow_sucursal_fallback:
+                                logger.info("Fallback por sucursal habilitado, intentando ruta sucursal")
+                                target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
                     else:
-                        logger.warning("Lead creado sin vendedor asignado, usando fallback por sucursal")
-                        target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
+                        logger.warning("Lead creado sin vendedor asignado")
+                        if allow_sucursal_fallback:
+                            logger.info("Fallback por sucursal habilitado, intentando ruta sucursal")
+                            target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
                 else:
                     lead_creation_error = "No se pudo crear el lead en Horizon"
                     logger.warning(lead_creation_error)
-                    target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
+                    if allow_sucursal_fallback:
+                        target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
             else:
-                # No cliente data, use fallback
-                logger.info("Datos de cliente incompletos, usando fallback por sucursal")
-                target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
+                logger.info("Datos de cliente incompletos")
+                if allow_sucursal_fallback:
+                    logger.info("Fallback por sucursal habilitado, intentando ruta sucursal")
+                    target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
             
             # Send WhatsApp message to sucursal
             whatsapp_sent = False

@@ -488,6 +488,7 @@ def _execute_tool_calls(
                 "twilio_auth_token": twilio_credentials.get("twilio_auth_token"),
                 "twilio_messaging_service_sid": twilio_credentials.get("twilio_messaging_service_sid"),
                 "twilio_from_whatsapp": twilio_credentials.get("twilio_from_whatsapp"),
+                "allow_sucursal_fallback": bool(bot_metadata.get("allow_sucursal_fallback", False)),
             }
             result = custom_functions_service.execute_custom_function(
                 function_name=call.name,
@@ -587,6 +588,7 @@ def _try_auto_dispatch_bateriasya_lead(
             "twilio_auth_token": twilio_credentials.get("twilio_auth_token"),
             "twilio_messaging_service_sid": twilio_credentials.get("twilio_messaging_service_sid"),
             "twilio_from_whatsapp": twilio_credentials.get("twilio_from_whatsapp"),
+            "allow_sucursal_fallback": bool(bot_metadata.get("allow_sucursal_fallback", False)),
         }
 
         result = service.execute_custom_function(
