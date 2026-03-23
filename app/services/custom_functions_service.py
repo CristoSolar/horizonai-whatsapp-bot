@@ -23,7 +23,7 @@ class CustomFunctionsService:
     ):
         self.twilio_service = twilio_service
         self.redis_client = redis_client
-        self.horizon_api_token = horizon_api_token or "MAcRfN4JdCvtxNsRiytKWJhE2LlzeyS795Xo53wGRZ4XtplrJGQKhkpi7rGDG2mO"
+        self.horizon_api_token = horizon_api_token or self._resolve_default_horizon_token()
         self.horizon_api_base = "https://api.horizonai.cl"
         self.twilio_template_sid = twilio_template_sid
         self.twilio_messaging_service_sid = twilio_messaging_service_sid
@@ -32,6 +32,27 @@ class CustomFunctionsService:
         self.slot_minutes_default = 60
         self.max_slots_per_vendedor = 5
         self.request_timeout = 15
+
+    @staticmethod
+    def _resolve_default_horizon_token() -> Optional[str]:
+        try:
+            return current_app.config.get("HORIZON_API_KEY")
+        except Exception:
+            return None
+
+    def _get_handlers(self):
+        return {
+            # Backward-compatible aliases for lead extraction
+            "extract_hori_bateriasya_data": self._handle_service_lead_extraction,
+            "extract_hori_service_data": self._handle_service_lead_extraction,
+            # Agenda/CRM orchestration functions
+            "listar_vendedores": self._handle_listar_vendedores,
+            "buscar_disponibilidad": self._handle_buscar_disponibilidad,
+            "agendar_cita": self._handle_agendar_cita,
+        }
+
+    def supports_function(self, function_name: str) -> bool:
+        return function_name in self._get_handlers()
         
     def execute_custom_function(
         self,
@@ -41,14 +62,7 @@ class CustomFunctionsService:
         bot_context: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """Route custom function calls to their handlers."""
-        
-        handlers = {
-            "extract_hori_bateriasya_data": self._handle_bateriasya_extraction,
-            # Agenda/CRM orchestration functions
-            "listar_vendedores": self._handle_listar_vendedores,
-            "buscar_disponibilidad": self._handle_buscar_disponibilidad,
-            "agendar_cita": self._handle_agendar_cita,
-        }
+        handlers = self._get_handlers()
         
         handler = handlers.get(function_name)
         if not handler:
@@ -644,8 +658,16 @@ class CustomFunctionsService:
         arguments: Dict[str, Any],
         bot_context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Handle extract_hori_bateriasya_data function call."""
-        
+        """Backward-compatible wrapper for legacy function name."""
+        return self._handle_service_lead_extraction(arguments, bot_context)
+
+    def _handle_service_lead_extraction(
+        self,
+        arguments: Dict[str, Any],
+        bot_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Handle lead extraction + Horizon lead creation + WhatsApp notification."""
+
         try:
             # Extract data from arguments
             servicio = arguments.get("servicio", {})
@@ -657,10 +679,14 @@ class CustomFunctionsService:
             # Target phone will be determined from lead's assigned vendedor
             target_phone = None
             vendedor_id = None
+            service_title = str(bot_context.get("service_notification_title") or "NUEVO SERVICIO").strip()
+            service_name = str(bot_context.get("service_display_name") or "").strip()
+            lead_procedencia = str(bot_context.get("lead_procedencia") or "whatsapp").strip() or "whatsapp"
+            header_line = f"{service_title} - {service_name}" if service_name else service_title
             
             # Format message with extracted data
             message_parts = [
-                "NUEVO SERVICIO - BateriasYa",
+                header_line,
                 "",
                 "Servicio:",
                 f"  Comuna: {servicio.get('comuna', 'N/A')}",
@@ -698,20 +724,25 @@ class CustomFunctionsService:
             lead_creation_error = None
             lead_data = None
             
-            if cliente and cliente.get("nombre") and cliente.get("correo") and cliente.get("telefono"):
+            if cliente and cliente.get("nombre") and cliente.get("telefono"):
                 # Format vehicle info for mensaje field
                 vehiculo_info = f"Vehículo: {vehiculo.get('marca', 'N/A')} {vehiculo.get('modelo', 'N/A')} {vehiculo.get('anio', 'N/A')} - Combustible: {vehiculo.get('combustible', 'N/A')}, Start-Stop: {vehiculo.get('start_stop', 'N/A')}"
                 servicio_info = f"Servicio en: {servicio.get('comuna', 'N/A')}"
                 direccion_info = f"Dirección: {cliente.get('direccion', 'N/A')}, Ref: {cliente.get('referencia', 'N/A')}"
                 
                 mensaje_lead = f"{vehiculo_info}. {servicio_info}. {direccion_info}. Estado: {estado_flujo}"
+                correo_cliente = (
+                    cliente.get("correo")
+                    or bot_context.get("lead_default_email")
+                    or "sin-correo@pendiente.cl"
+                )
                 
                 lead_data = self._create_horizon_lead(
                     nombre=f"{cliente.get('nombre', '')} {cliente.get('apellido', '')}".strip(),
-                    correo=cliente.get("correo", ""),
+                    correo=correo_cliente,
                     telefono=cliente.get("telefono", ""),
                     mensaje=mensaje_lead,
-                    procedencia="whatsapp_bateriasya",
+                    procedencia=lead_procedencia,
                 )
                 
                 if lead_data and lead_data.get("id"):
@@ -872,7 +903,7 @@ class CustomFunctionsService:
             return response
                 
         except Exception as e:
-            logger.error(f"Error in _handle_bateriasya_extraction: {e}")
+            logger.error(f"Error in _handle_service_lead_extraction: {e}")
             return {
                 "success": False,
                 "error": str(e),

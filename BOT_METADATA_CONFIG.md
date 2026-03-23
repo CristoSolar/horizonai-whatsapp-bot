@@ -47,6 +47,70 @@ Mapeo de comunas/palabras clave a números de WhatsApp de sucursales para notifi
 }
 ```
 
+### 5. `service_notification_title` (string)
+Título principal del mensaje que se envía por WhatsApp cuando se extrae un lead.
+
+**Ejemplo:**
+```json
+"service_notification_title": "NUEVO SERVICIO"
+```
+
+### 6. `service_display_name` (string)
+Nombre comercial del servicio para el encabezado del mensaje (se concatena al título).
+
+**Ejemplo:**
+```json
+"service_display_name": "MiServicioExpress"
+```
+
+### 7. `lead_procedencia` (string)
+Valor de `procedencia` usado al crear leads en Horizon.
+
+**Ejemplo:**
+```json
+"lead_procedencia": "whatsapp_miservicio"
+```
+
+### 8. `lead_default_email` (string)
+Correo por defecto si el cliente no entrega email durante la conversación.
+
+**Ejemplo:**
+```json
+"lead_default_email": "sin-correo@pendiente.cl"
+```
+
+### 9. `auto_dispatch_enabled` (boolean)
+Habilita auto-dispatch de lead al completar campos requeridos en memoria de conversación.
+
+**Ejemplo:**
+```json
+"auto_dispatch_enabled": true
+```
+
+### 10. `auto_dispatch_function_name` (string)
+Nombre de la función custom a ejecutar en el auto-dispatch.
+
+**Ejemplo:**
+```json
+"auto_dispatch_function_name": "extract_hori_service_data"
+```
+
+### 11. `auto_dispatch_required_fields` (array)
+Campos obligatorios para disparar auto-dispatch.
+
+**Ejemplo:**
+```json
+"auto_dispatch_required_fields": ["comuna", "marca", "año", "combustible", "start_stop", "telefono"]
+```
+
+### 12. `auto_dispatch_sent_flag` (string)
+Nombre del flag guardado en Redis para evitar despachos duplicados.
+
+**Ejemplo:**
+```json
+"auto_dispatch_sent_flag": "notification_sent"
+```
+
 ## Ejemplo Completo de Metadata
 
 ```json
@@ -54,6 +118,13 @@ Mapeo de comunas/palabras clave a números de WhatsApp de sucursales para notifi
   "horizon_api_token": "MAcRfN4JdCvtxNsRiytKWJhE2LlzeyS795Xo53wGRZ4XtplrJGQKhkpi7rGDG2mO",
   "twilio_template_sid": "HXa1b2c3d4e5f6g7h8i9j0k1l2m3n4o5",
   "twilio_messaging_service_sid": "MG76bf87ef6cc85272131b6e8511ff1a8f",
+  "service_notification_title": "NUEVO SERVICIO",
+  "service_display_name": "BateriasYa",
+  "lead_procedencia": "whatsapp_bateriasya",
+  "auto_dispatch_enabled": true,
+  "auto_dispatch_function_name": "extract_hori_service_data",
+  "auto_dispatch_required_fields": ["comuna", "marca", "año", "combustible", "start_stop", "telefono"],
+  "auto_dispatch_sent_flag": "notification_sent",
   "sucursal_phone_map": {
     "santiago": "+56978493528",
     "rm": "+56978493528",

@@ -39,6 +39,7 @@ show_help() {
     echo ""
     echo "Uso:"
     echo "  $0 \"Nombre Cliente\" \"+número\" \"prompt personalizado\""
+    echo "  $0   # modo interactivo"
     echo ""
     echo "Ejemplo:"
     echo "  $0 \"Restaurante La Cocina\" \"+15551234567\" \"Eres un asistente para el restaurante La Cocina\""
@@ -57,15 +58,39 @@ show_help() {
     exit 1
 }
 
-# Verificar parámetros
-if [ $# -ne 3 ]; then
-    echo -e "${RED}❌ Error: Se requieren exactamente 3 parámetros${NC}"
-    show_help
-fi
+  prompt_interactive() {
+    echo -e "${BLUE}Modo interactivo activado${NC}"
+    echo ""
 
-CLIENTE_NOMBRE="$1"
-NUMERO_WHATSAPP="$2"
-PROMPT_PERSONALIZADO="$3"
+    read -r -p "Nombre del cliente: " CLIENTE_NOMBRE
+    read -r -p "Numero de WhatsApp (formato +569XXXXXXXX): " NUMERO_WHATSAPP
+    read -r -p "Tipo de negocio (ej: restaurante, clinica, automotriz): " TIPO_NEGOCIO
+    read -r -p "Prompt base (opcional, Enter para autogenerar): " PROMPT_PERSONALIZADO
+
+    if [ -z "${CLIENTE_NOMBRE}" ] || [ -z "${NUMERO_WHATSAPP}" ]; then
+      echo -e "${RED}❌ Nombre y numero son obligatorios${NC}"
+      exit 1
+    fi
+
+    if [ -z "${PROMPT_PERSONALIZADO}" ]; then
+      if [ -z "${TIPO_NEGOCIO}" ]; then
+        TIPO_NEGOCIO="negocio"
+      fi
+      PROMPT_PERSONALIZADO="Eres un asistente de WhatsApp para ${CLIENTE_NOMBRE}, un ${TIPO_NEGOCIO}. Responde claro, breve y profesional."
+    fi
+  }
+
+# Verificar parámetros
+  if [ $# -eq 0 ]; then
+    prompt_interactive
+  elif [ $# -eq 3 ]; then
+    CLIENTE_NOMBRE="$1"
+    NUMERO_WHATSAPP="$2"
+    PROMPT_PERSONALIZADO="$3"
+  else
+    echo -e "${RED}❌ Error: Usa 0 parámetros (interactivo) o 3 parámetros (modo directo)${NC}"
+    show_help
+  fi
 
 echo ""
 echo -e "${BLUE}🚀 Creando nuevo cliente: ${CLIENTE_NOMBRE}${NC}"

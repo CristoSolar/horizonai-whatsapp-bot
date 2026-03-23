@@ -113,7 +113,7 @@ def handle_incoming_message(
     client_data = client_data_manager.get_client_data(user_number)
     logger.info(f"💾 Current client data: {client_data}")
 
-    _try_auto_dispatch_bateriasya_lead(
+    _try_auto_dispatch_lead_notification(
         bot=bot,
         user_number=user_number,
         client_data_manager=client_data_manager,
@@ -282,6 +282,18 @@ def _normalize_whatsapp_number(value: Optional[str]) -> Optional[str]:
     return normalized
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "si", "sí", "on"}
+
+
+def _is_legacy_bateriasya_bot(bot: Dict[str, Any]) -> bool:
+    assistant_id = (bot.get("assistant_id") or "").strip()
+    bot_name = (bot.get("name") or "").lower()
+    return ("bateria" in bot_name) or (assistant_id == "asst_svobnYajdAylQaM5Iqz8Dof3")
+
+
 def _resolve_twilio_from_gestion_empresa(*, client_id: Optional[Any], whatsapp_number: Optional[str]) -> Dict[str, Optional[str]]:
     try:
         engine = db_extension.engine
@@ -421,16 +433,7 @@ def _execute_tool_calls(
     user_number: str,
 ) -> List[ToolResult]:
     """Execute tool calls, checking custom functions first, then Horizon actions."""
-    
-    # List of custom function names
-    custom_functions = [
-        "extract_hori_bateriasya_data",
-        # Orquestación de agendas/CRM
-        "listar_vendedores",
-        "buscar_disponibilidad",
-        "agendar_cita",
-    ]
-    
+
     results: List[ToolResult] = []
     
     # Initialize custom functions service with Twilio and Redis
@@ -448,17 +451,6 @@ def _execute_tool_calls(
     # Get bot-specific configuration from metadata
     bot_metadata = bot.get("metadata") or {}
     horizon_api_token = _resolve_horizon_token_for_bot(bot)
-    # Override token for specific assistant if provided (per user request)
-    try:
-        assistant_id = bot.get("assistant_id")
-        per_assistant_tokens = {
-            # Token provisto por el cliente para este asistente
-            "asst_1CYCRroCYaf2oeOWU7KGsih9": "f2W3tldUJqnkABs9ndT1pfMWYDF0AXTjPk0HVtyz5iX1TO8mEit8qyXO952eqxUR",
-        }
-        if assistant_id in per_assistant_tokens and not horizon_api_token:
-            horizon_api_token = per_assistant_tokens[assistant_id]
-    except Exception:
-        pass
     twilio_template_sid = bot_metadata.get("twilio_template_sid")
     twilio_messaging_service_sid = bot_metadata.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid")
     sucursal_phone_map = bot_metadata.get("sucursal_phone_map") or {}
@@ -476,7 +468,7 @@ def _execute_tool_calls(
     
     for call in function_calls:
         # Check if it's a custom function
-        if call.name in custom_functions:
+        if custom_functions_service.supports_function(call.name):
             logger.info(f"🔧 Executing custom function: {call.name}")
             logger.info(f"   Arguments: {call.arguments}")
             bot_context = {
@@ -489,6 +481,10 @@ def _execute_tool_calls(
                 "twilio_messaging_service_sid": twilio_credentials.get("twilio_messaging_service_sid"),
                 "twilio_from_whatsapp": twilio_credentials.get("twilio_from_whatsapp"),
                 "allow_sucursal_fallback": bool(bot_metadata.get("allow_sucursal_fallback", False)),
+                "service_notification_title": bot_metadata.get("service_notification_title"),
+                "service_display_name": bot_metadata.get("service_display_name") or bot.get("name"),
+                "lead_procedencia": bot_metadata.get("lead_procedencia"),
+                "lead_default_email": bot_metadata.get("lead_default_email"),
             }
             result = custom_functions_service.execute_custom_function(
                 function_name=call.name,
@@ -510,21 +506,23 @@ def _execute_tool_calls(
     return results
 
 
-def _try_auto_dispatch_bateriasya_lead(
+def _try_auto_dispatch_lead_notification(
     *,
     bot: Dict[str, Any],
     user_number: str,
     client_data_manager: ClientDataManager,
     client_data: Dict[str, Any],
 ) -> None:
-    assistant_id = (bot.get("assistant_id") or "").strip()
-    bot_name = (bot.get("name") or "").lower()
-    is_bateriasya = ("bateria" in bot_name) or (assistant_id == "asst_svobnYajdAylQaM5Iqz8Dof3")
-    if not is_bateriasya:
+    metadata = bot.get("metadata") or {}
+    auto_dispatch_enabled = metadata.get("auto_dispatch_enabled")
+    is_enabled = _as_bool(auto_dispatch_enabled) if auto_dispatch_enabled is not None else _is_legacy_bateriasya_bot(bot)
+
+    if not is_enabled:
         return
 
-    if client_data.get("notification_sent"):
-        logger.info("⏭️ Auto-dispatch omitido: ya existe notification_sent para %s", user_number)
+    sent_flag_field = str(metadata.get("auto_dispatch_sent_flag") or "notification_sent")
+    if client_data.get(sent_flag_field):
+        logger.info("⏭️ Auto-dispatch omitido: ya existe %s para %s", sent_flag_field, user_number)
         return
 
     enriched_client_data = dict(client_data or {})
@@ -533,7 +531,18 @@ def _try_auto_dispatch_bateriasya_lead(
         client_data_manager.update_client_data(user_number, "telefono", user_number)
         logger.info("📞 Auto-dispatch: teléfono completado desde user_number=%s", user_number)
 
-    required_fields = ["comuna", "marca", "modelo", "año", "combustible", "start_stop", "telefono"]
+    configured_required = metadata.get("auto_dispatch_required_fields")
+    if isinstance(configured_required, list) and configured_required:
+        required_fields = [str(field) for field in configured_required if str(field).strip()]
+    else:
+        required_fields = ["comuna", "marca", "año", "combustible", "start_stop", "telefono"]
+
+    function_name = str(
+        metadata.get("auto_dispatch_function_name")
+        or metadata.get("lead_extraction_function_name")
+        or "extract_hori_bateriasya_data"
+    )
+
     missing = [field for field in required_fields if not enriched_client_data.get(field)]
     if missing:
         logger.info("⏭️ Auto-dispatch omitido para %s: faltan campos %s", user_number, missing)
@@ -597,22 +606,26 @@ def _try_auto_dispatch_bateriasya_lead(
             "twilio_messaging_service_sid": twilio_credentials.get("twilio_messaging_service_sid"),
             "twilio_from_whatsapp": twilio_credentials.get("twilio_from_whatsapp"),
             "allow_sucursal_fallback": bool(bot_metadata.get("allow_sucursal_fallback", False)),
+            "service_notification_title": bot_metadata.get("service_notification_title"),
+            "service_display_name": bot_metadata.get("service_display_name") or bot.get("name"),
+            "lead_procedencia": bot_metadata.get("lead_procedencia"),
+            "lead_default_email": bot_metadata.get("lead_default_email"),
         }
 
         result = service.execute_custom_function(
-            function_name="extract_hori_bateriasya_data",
+            function_name=function_name,
             arguments=payload,
             bot_context=bot_context,
         )
 
         if result.get("success"):
-            client_data_manager.update_client_data(user_number, "notification_sent", True)
+            client_data_manager.update_client_data(user_number, sent_flag_field, True)
             if result.get("message_sid"):
                 client_data_manager.update_client_data(user_number, "notification_message_sid", result.get("message_sid"))
             if result.get("target_phone"):
                 client_data_manager.update_client_data(user_number, "notification_target_phone", result.get("target_phone"))
-            logger.info(f"✅ Auto-dispatch BateriasYa ejecutado para {user_number}: {result}")
+            logger.info(f"✅ Auto-dispatch ejecutado para {user_number}: {result}")
         else:
-            logger.warning(f"⚠️ Auto-dispatch BateriasYa sin éxito para {user_number}: {result}")
+            logger.warning(f"⚠️ Auto-dispatch sin éxito para {user_number}: {result}")
     except Exception as exc:
-        logger.error(f"❌ Error en auto-dispatch BateriasYa para {user_number}: {exc}")
+        logger.error(f"❌ Error en auto-dispatch para {user_number}: {exc}")
