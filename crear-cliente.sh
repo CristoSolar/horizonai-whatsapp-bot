@@ -3,10 +3,11 @@
 # 🚀 Script Automatizado para Crear Nuevo Cliente
 # Sistema Multi-Cliente: Un servidor, múltiples clientes independientes
 # 
-# Uso: ./crear-cliente.sh "Nombre Cliente" "+número" "prompt personalizado"
+# Uso: ./crear-cliente.sh "Nombre Cliente" "+número" "assistant_id"
 #
-# ⚠️  IMPORTANTE: NO necesitas modificar .env para cada cliente
-#    El sistema maneja múltiples números automáticamente
+# ⚠️  IMPORTANTE: NO necesitas crear asistentes aquí
+#    El asistente debe estar YA CREADO en tu plataforma OpenAI
+#    Este script solo registra el bot con el número de teléfono
 
 set -e
 
@@ -38,16 +39,16 @@ show_help() {
     echo -e "${YELLOW}   • Un solo servidor maneja todos los clientes${NC}"
     echo ""
     echo "Uso:"
-    echo "  $0 \"Nombre Cliente\" \"+número\" \"prompt personalizado\""
+    echo "  $0 \"Nombre Cliente\" \"+número\" \"assistant_id\""
     echo "  $0   # modo interactivo"
     echo ""
     echo "Ejemplo:"
-    echo "  $0 \"Restaurante La Cocina\" \"+15551234567\" \"Eres un asistente para el restaurante La Cocina\""
+    echo "  $0 \"CFMoto\" \"+15559015856\" \"asst_kxjxMdZC8E0z539yukkqK0oH\""
     echo ""
     echo "Parámetros:"
     echo "  1. Nombre del cliente (entre comillas)"
     echo "  2. Número de WhatsApp (con código de país)"
-    echo "  3. Prompt personalizado para el asistente (entre comillas)"
+    echo "  3. Assistant ID de OpenAI (ya existente en tu plataforma)"
     echo ""
     echo -e "${GREEN}Clientes actuales:${NC}"
     if [ -f "clientes_creados.log" ]; then
@@ -117,11 +118,16 @@ BOT_RESPONSE=$(curl -s -X POST "${API_BASE}/bots/" \
     }
   }")
 
-# Extraer Bot ID
-BOT_ID=$(echo "$BOT_RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+# Extraer Bot ID usando jq (más confiable con JSON)
+if command -v jq &> /dev/null; then
+    BOT_ID=$(echo "$BOT_RESPONSE" | jq -r '.data.id // empty')
+else
+    # Fallback si jq no está disponible
+    BOT_ID=$(echo "$BOT_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+fi
 
 if [ -z "$BOT_ID" ]; then
-    echo -e "${RED}❌ Error creando bot. Respuesta:${NC}"
+    echo -e "${RED}❌ Error creando bot. Respuesta completa:${NC}"
     echo "$BOT_RESPONSE"
     exit 1
 fi
