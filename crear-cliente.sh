@@ -64,19 +64,11 @@ show_help() {
 
     read -r -p "Nombre del cliente: " CLIENTE_NOMBRE
     read -r -p "Numero de WhatsApp (formato +569XXXXXXXX): " NUMERO_WHATSAPP
-    read -r -p "Tipo de negocio (ej: restaurante, clinica, automotriz): " TIPO_NEGOCIO
-    read -r -p "Prompt base (opcional, Enter para autogenerar): " PROMPT_PERSONALIZADO
+    read -r -p "Assistant ID de OpenAI (ya existente): " ASSISTANT_ID
 
-    if [ -z "${CLIENTE_NOMBRE}" ] || [ -z "${NUMERO_WHATSAPP}" ]; then
-      echo -e "${RED}❌ Nombre y numero son obligatorios${NC}"
+    if [ -z "${CLIENTE_NOMBRE}" ] || [ -z "${NUMERO_WHATSAPP}" ] || [ -z "${ASSISTANT_ID}" ]; then
+      echo -e "${RED}❌ Nombre, numero y assistant_id son obligatorios${NC}"
       exit 1
-    fi
-
-    if [ -z "${PROMPT_PERSONALIZADO}" ]; then
-      if [ -z "${TIPO_NEGOCIO}" ]; then
-        TIPO_NEGOCIO="negocio"
-      fi
-      PROMPT_PERSONALIZADO="Eres un asistente de WhatsApp para ${CLIENTE_NOMBRE}, un ${TIPO_NEGOCIO}. Responde claro, breve y profesional."
     fi
   }
 
@@ -86,9 +78,9 @@ show_help() {
   elif [ $# -eq 3 ]; then
     CLIENTE_NOMBRE="$1"
     NUMERO_WHATSAPP="$2"
-    PROMPT_PERSONALIZADO="$3"
+    ASSISTANT_ID="$3"
   else
-    echo -e "${RED}❌ Error: Usa 0 parámetros (interactivo) o 3 parámetros (modo directo)${NC}"
+    echo -e "${RED}❌ Error: Usa 0 parámetros (interactivo) o 3 parámetros (nombre, número, assistant_id)${NC}"
     show_help
   fi
 
@@ -109,38 +101,13 @@ if [ ! -z "$EXISTING_BOT" ]; then
 fi
 echo -e "${GREEN}✅ Número disponible${NC}"
 
-# Paso 1: Crear Asistente en OpenAI
-echo -e "${YELLOW}📋 Paso 1: Creando asistente personalizado...${NC}"
-
-ASSISTANT_RESPONSE=$(curl -s -X POST "${API_BASE}/assistants/" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"name\": \"Bot ${CLIENTE_NOMBRE}\",
-    \"instructions\": \"${PROMPT_PERSONALIZADO}\",
-    \"model\": \"gpt-4o-mini\",
-    \"tools\": []
-  }")
-
-# Extraer Assistant ID
-ASSISTANT_ID=$(echo "$ASSISTANT_RESPONSE" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
-
-if [ -z "$ASSISTANT_ID" ]; then
-    echo -e "${RED}❌ Error creando asistente. Respuesta:${NC}"
-    echo "$ASSISTANT_RESPONSE"
-    exit 1
-fi
-
-echo -e "${GREEN}✅ Asistente creado: ${ASSISTANT_ID}${NC}"
-
-# Paso 2: Crear Bot en el Sistema
-echo -e "${YELLOW}🤖 Paso 2: Creando bot en el sistema...${NC}"
+# Paso 1: Crear Bot en el Sistema
+echo -e "${YELLOW}📋 Paso 1: Creando bot en el sistema...${NC}"
 
 BOT_RESPONSE=$(curl -s -X POST "${API_BASE}/bots/" \
   -H "Content-Type: application/json" \
   -d "{
     \"name\": \"${CLIENTE_NOMBRE}\",
-    \"instructions\": \"${PROMPT_PERSONALIZADO}\",
-    \"model\": \"gpt-4o-mini\",
     \"twilio_phone_number\": \"${NUMERO_WHATSAPP}\",
     \"assistant_id\": \"${ASSISTANT_ID}\",
     \"metadata\": {
@@ -161,8 +128,8 @@ fi
 
 echo -e "${GREEN}✅ Bot creado: ${BOT_ID}${NC}"
 
-# Paso 3: Test del Webhook
-echo -e "${YELLOW}🧪 Paso 3: Probando webhook...${NC}"
+# Paso 2: Test del Webhook
+echo -e "${YELLOW}🧪 Paso 2: Probando webhook...${NC}"
 
 TEST_RESPONSE=$(curl -s -X POST "${API_BASE}/webhook/whatsapp" \
   -H "Content-Type: application/x-www-form-urlencoded" \
@@ -175,7 +142,7 @@ else
     echo -e "${GREEN}✅ Webhook funcionando correctamente${NC}"
 fi
 
-# Paso 4: Generar Reporte
+# Paso 3: Generar Reporte
 echo ""
 echo -e "${BLUE}📊 REPORTE DE CREACIÓN COMPLETADO${NC}"
 echo -e "${BLUE}=================================${NC}"
@@ -186,7 +153,7 @@ echo -e "${GREEN}Bot ID:${NC} ${BOT_ID}"
 echo -e "${GREEN}Fecha:${NC} ${TIMESTAMP}"
 echo ""
 
-# Paso 5: Instrucciones para Twilio
+# Paso 4: Instrucciones para Twilio
 echo -e "${YELLOW}📱 CONFIGURACIÓN PENDIENTE EN TWILIO:${NC}"
 echo -e "${YELLOW}===================================${NC}"
 echo "1. Ve a Twilio Console → WhatsApp → Senders"
@@ -196,7 +163,7 @@ echo "   ${API_BASE}/webhook/whatsapp"
 echo "4. Método: HTTP Post"
 echo ""
 
-# Paso 6: Comandos útiles
+# Paso 5: Comandos útiles
 echo -e "${BLUE}🔧 COMANDOS ÚTILES PARA ESTE CLIENTE:${NC}"
 echo -e "${BLUE}====================================${NC}"
 echo "# Ver detalles del bot:"
@@ -219,7 +186,7 @@ echo "# Ver TODOS los clientes:"
 echo "curl ${API_BASE}/bots/ | jq '.[] | {name, twilio_phone_number, assistant_id}'"
 echo ""
 
-# Paso 7: Recordatorios importantes
+# Paso 6: Recordatorios importantes
 echo -e "${PURPLE}📋 RECORDATORIOS IMPORTANTES:${NC}"
 echo -e "${PURPLE}============================${NC}"
 echo -e "${GREEN}✅ El archivo .env NO se modifica para este cliente${NC}"
