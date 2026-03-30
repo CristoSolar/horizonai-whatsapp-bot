@@ -86,6 +86,13 @@ FUNCTION_DEFINITION = {
                     "type": "string",
                     "description": "Estado inferido del flujo de atención.",
                     "enum": ["pre_cotizacion", "cotizacion_enviada", "agendando", "agendado"]
+                },
+                "contexto_adicional": {
+                    "type": "object",
+                    "description": "Datos adicionales no mapeados a campos directos de Horizon (ej: patente, motor, observaciones, promo, etc.). Se incluirán en el mensaje del lead.",
+                    "additionalProperties": {
+                        "type": ["string", "number", "boolean"]
+                    }
                 }
             },
             "required": ["servicio", "vehiculo", "cliente", "estado_flujo"],

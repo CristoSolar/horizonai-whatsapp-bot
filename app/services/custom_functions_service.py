@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import requests
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set
 from flask import current_app
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ class CustomFunctionsService:
             # Backward-compatible aliases for lead extraction
             "extract_hori_bateriasya_data": self._handle_service_lead_extraction,
             "extract_hori_service_data": self._handle_service_lead_extraction,
+            "extract_hori_cfmoto_data": self._handle_cfmoto_lead_extraction,
             # Agenda/CRM orchestration functions
             "listar_vendedores": self._handle_listar_vendedores,
             "buscar_disponibilidad": self._handle_buscar_disponibilidad,
@@ -652,6 +653,60 @@ class CustomFunctionsService:
         except Exception as e:
             logger.error(f"Error getting lead ID from Redis: {e}")
             return None
+
+    @staticmethod
+    def _flatten_payload(prefix: str, value: Any, result: Dict[str, Any]) -> None:
+        """Flatten nested dict/list payload into path -> value entries."""
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                key_str = str(key)
+                next_prefix = f"{prefix}.{key_str}" if prefix else key_str
+                CustomFunctionsService._flatten_payload(next_prefix, nested, result)
+            return
+
+        if isinstance(value, list):
+            for index, nested in enumerate(value):
+                next_prefix = f"{prefix}[{index}]" if prefix else f"[{index}]"
+                CustomFunctionsService._flatten_payload(next_prefix, nested, result)
+            return
+
+        result[prefix] = value
+
+    @staticmethod
+    def _extract_non_horizon_fields(arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Return flattened fields that are not first-class Horizon lead fields."""
+        flattened: Dict[str, Any] = {}
+        CustomFunctionsService._flatten_payload("", arguments or {}, flattened)
+
+        mapped_paths: Set[str] = {
+            "servicio.comuna",
+            "vehiculo.marca",
+            "vehiculo.modelo",
+            "vehiculo.anio",
+            "vehiculo.combustible",
+            "vehiculo.start_stop",
+            "cliente.nombre",
+            "cliente.apellido",
+            "cliente.rut",
+            "cliente.telefono",
+            "cliente.correo",
+            "cliente.direccion",
+            "cliente.referencia",
+            "estado_flujo",
+        }
+
+        extras: Dict[str, Any] = {}
+        for path, raw_value in flattened.items():
+            if path in mapped_paths:
+                continue
+            if raw_value is None:
+                continue
+            value = str(raw_value).strip() if isinstance(raw_value, str) else raw_value
+            if value in ("", [], {}):
+                continue
+            extras[path] = value
+
+        return extras
     
     def _handle_bateriasya_extraction(
         self,
@@ -660,6 +715,46 @@ class CustomFunctionsService:
     ) -> Dict[str, Any]:
         """Backward-compatible wrapper for legacy function name."""
         return self._handle_service_lead_extraction(arguments, bot_context)
+
+    def _handle_cfmoto_lead_extraction(
+        self,
+        arguments: Dict[str, Any],
+        bot_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Adapter for CFMOTO payloads that reuses generic lead extraction flow."""
+        moto_interes = arguments.get("moto_interes", {}) or {}
+        preferencias_compra = arguments.get("preferencias_compra", {}) or {}
+        cliente = arguments.get("cliente", {}) or {}
+        estado_flujo = arguments.get("estado_flujo", "consultando_modelo")
+        contexto_adicional = arguments.get("contexto_adicional", {}) or {}
+
+        adapted_arguments = {
+            "servicio": {
+                "comuna": preferencias_compra.get("sucursal_preferencia", "N/A"),
+            },
+            "vehiculo": {
+                "marca": "CFMOTO",
+                "modelo": moto_interes.get("modelo", "N/A"),
+                "anio": contexto_adicional.get("anio_modelo", "N/A"),
+                "combustible": contexto_adicional.get("tipo_motor", "N/A"),
+                "start_stop": "desconocido",
+            },
+            "cliente": {
+                "nombre": cliente.get("nombre", ""),
+                "apellido": cliente.get("apellido", ""),
+                "rut": cliente.get("rut", "N/A"),
+                "telefono": cliente.get("telefono", ""),
+                "correo": cliente.get("correo", ""),
+                "direccion": cliente.get("direccion", "N/A"),
+                "referencia": cliente.get("referencia", "N/A"),
+            },
+            "estado_flujo": estado_flujo,
+            "moto_interes": moto_interes,
+            "preferencias_compra": preferencias_compra,
+            "contexto_adicional": contexto_adicional,
+        }
+
+        return self._handle_service_lead_extraction(adapted_arguments, bot_context)
 
     def _handle_service_lead_extraction(
         self,
@@ -716,6 +811,15 @@ class CustomFunctionsService:
                 "",
                 f"Estado: {estado_flujo}",
             ])
+
+            extra_fields = self._extract_non_horizon_fields(arguments)
+            if extra_fields:
+                message_parts.extend([
+                    "",
+                    "Contexto adicional:",
+                ])
+                for key, value in extra_fields.items():
+                    message_parts.append(f"  {key}: {value}")
             
             message_body = "\n".join(message_parts)
             
@@ -731,6 +835,9 @@ class CustomFunctionsService:
                 direccion_info = f"Dirección: {cliente.get('direccion', 'N/A')}, Ref: {cliente.get('referencia', 'N/A')}"
                 
                 mensaje_lead = f"{vehiculo_info}. {servicio_info}. {direccion_info}. Estado: {estado_flujo}"
+                if extra_fields:
+                    extra_compact = " | ".join(f"{key}: {value}" for key, value in extra_fields.items())
+                    mensaje_lead = f"{mensaje_lead}. Contexto adicional: {extra_compact}"
                 correo_cliente = (
                     cliente.get("correo")
                     or bot_context.get("lead_default_email")
