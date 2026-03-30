@@ -548,6 +548,7 @@ class CustomFunctionsService:
         procedencia: str = "whatsapp",
         vendedor_username: Optional[str] = None,
         token_override: Optional[str] = None,
+        custom_fields: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Create a lead in Horizon Manager API."""
         try:
@@ -565,6 +566,8 @@ class CustomFunctionsService:
             }
             if vendedor_username:
                 payload["vendedor_username"] = vendedor_username
+            if custom_fields:
+                payload["custom_fields"] = custom_fields
             response = requests.post(url, headers=headers, json=payload, timeout=10)
             response.raise_for_status()
             lead_data = response.json()
@@ -701,6 +704,9 @@ class CustomFunctionsService:
         for path, raw_value in flattened.items():
             if path in mapped_paths:
                 continue
+            # Exclude internal keys used to pass data between adapters
+            if path.startswith("_horizon_custom_fields"):
+                continue
             if raw_value is None:
                 continue
             value = str(raw_value).strip() if isinstance(raw_value, str) else raw_value
@@ -816,6 +822,10 @@ class CustomFunctionsService:
             },
             "estado_flujo": estado_flujo,
             "contexto_adicional": contexto_enriquecido,
+            # Custom Horizon fields for CFMOTO
+            "_horizon_custom_fields": {
+                "modelo": moto_interes.get("modelo", ""),
+            },
         }
         
         # Use CFMOTO-specific Horizon API token if available in bot context
@@ -857,6 +867,17 @@ class CustomFunctionsService:
             header_line = f"{service_title} - {service_name}" if service_name else service_title
             
             # Format message with extracted data
+            vehiculo_lines = [
+                f"  Marca: {vehiculo.get('marca', 'N/A')}",
+                f"  Modelo: {vehiculo.get('modelo', 'N/A')}",
+            ]
+            if vehiculo.get("anio") not in (None, "N/A", ""):
+                vehiculo_lines.append(f"  Año: {vehiculo.get('anio')}")
+            if vehiculo.get("combustible") not in (None, "N/A", ""):
+                vehiculo_lines.append(f"  Combustible: {vehiculo.get('combustible')}")
+            if vehiculo.get("start_stop") not in (None, "N/A", "desconocido", ""):
+                vehiculo_lines.append(f"  Start-Stop: {vehiculo.get('start_stop')}")
+
             message_parts = [
                 header_line,
                 "",
@@ -864,11 +885,7 @@ class CustomFunctionsService:
                 f"  Comuna: {servicio.get('comuna', 'N/A')}",
                 "",
                 "Vehiculo:",
-                f"  Marca: {vehiculo.get('marca', 'N/A')}",
-                f"  Modelo: {vehiculo.get('modelo', 'N/A')}",
-                f"  Año: {vehiculo.get('anio', 'N/A')}",
-                f"  Combustible: {vehiculo.get('combustible', 'N/A')}",
-                f"  Start-Stop: {vehiculo.get('start_stop', 'N/A')}",
+                *vehiculo_lines,
             ]
             
             # Add client data if available
@@ -906,8 +923,15 @@ class CustomFunctionsService:
             lead_data = None
             
             if cliente and cliente.get("nombre") and cliente.get("telefono"):
-                # Format vehicle info for mensaje field
-                vehiculo_info = f"Vehículo: {vehiculo.get('marca', 'N/A')} {vehiculo.get('modelo', 'N/A')} {vehiculo.get('anio', 'N/A')} - Combustible: {vehiculo.get('combustible', 'N/A')}, Start-Stop: {vehiculo.get('start_stop', 'N/A')}"
+                # Build vehicle info omitting N/A fields
+                vehiculo_parts = [f"{vehiculo.get('marca', 'N/A')} {vehiculo.get('modelo', 'N/A')}".strip()]
+                if vehiculo.get("anio") not in (None, "N/A", ""):
+                    vehiculo_parts.append(str(vehiculo.get("anio")))
+                if vehiculo.get("combustible") not in (None, "N/A", ""):
+                    vehiculo_parts.append(f"Combustible: {vehiculo.get('combustible')}")
+                if vehiculo.get("start_stop") not in (None, "N/A", "desconocido", ""):
+                    vehiculo_parts.append(f"Start-Stop: {vehiculo.get('start_stop')}")
+                vehiculo_info = f"Vehículo: {' '.join(vehiculo_parts)}"
                 servicio_info = f"Servicio en: {servicio.get('comuna', 'N/A')}"
                 direccion_info = f"Dirección: {cliente.get('direccion', 'N/A')}, Ref: {cliente.get('referencia', 'N/A')}"
                 
@@ -928,6 +952,7 @@ class CustomFunctionsService:
                     mensaje=mensaje_lead,
                     procedencia=lead_procedencia,
                     token_override=horizon_token_override,
+                    custom_fields=arguments.get("_horizon_custom_fields") or None,
                 )
                 
                 if lead_data and lead_data.get("id"):
