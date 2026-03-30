@@ -485,6 +485,8 @@ def _execute_tool_calls(
                 "service_display_name": bot_metadata.get("service_display_name") or bot.get("name"),
                 "lead_procedencia": bot_metadata.get("lead_procedencia"),
                 "lead_default_email": bot_metadata.get("lead_default_email"),
+                # Client-specific Horizon API tokens (e.g., CFMOTO)
+                "cfmoto_horizon_api_token": bot_metadata.get("cfmoto_horizon_api_token"),
             }
             result = custom_functions_service.execute_custom_function(
                 function_name=call.name,

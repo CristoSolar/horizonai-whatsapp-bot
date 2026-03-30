@@ -721,23 +721,40 @@ class CustomFunctionsService:
         arguments: Dict[str, Any],
         bot_context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Adapter for CFMOTO payloads that reuses generic lead extraction flow."""
+        """Adapter for CFMOTO payloads that reuses generic lead extraction flow.
+        
+        CFMOTO strategy:
+        - Look for cfmoto_horizon_api_token in bot_context, fallback to horizon_api_token
+        - Use sucursal_preferencia to resolve phone via sucursal_phone_map (fallback routing)
+        - Encode CFMOTO-specific data (familia, modelo) in mensaje for Horizon
+        - Use procedencia='whatsapp_cfmoto' so Horizon routes to CFMOTO vendor pool
+        - Keep all contexto_adicional to be included in lead message
+        """
         moto_interes = arguments.get("moto_interes", {}) or {}
         preferencias_compra = arguments.get("preferencias_compra", {}) or {}
         cliente = arguments.get("cliente", {}) or {}
         estado_flujo = arguments.get("estado_flujo", "consultando_modelo")
         contexto_adicional = arguments.get("contexto_adicional", {}) or {}
 
+        # Enrich contexto_adicional with CFMOTO-specific data so it lands in lead mensaje
+        contexto_enriquecido = dict(contexto_adicional or {})
+        contexto_enriquecido["familia_moto"] = moto_interes.get("familia", "desconocida")
+        contexto_enriquecido["modelo_moto"] = moto_interes.get("modelo", "desconocido")
+        contexto_enriquecido["sucursal_preferencia"] = preferencias_compra.get("sucursal_preferencia", "desconocida")
+        contexto_enriquecido["metodo_pago"] = preferencias_compra.get("metodo_pago", "desconocido")
+        
         adapted_arguments = {
+            # Mapear sucursal_preferencia a "comuna" para que sucursal_phone_map lo resuelva
             "servicio": {
-                "comuna": preferencias_compra.get("sucursal_preferencia", "N/A"),
+                "comuna": preferencias_compra.get("sucursal_preferencia", "desconocida").lower(),
             },
+            # Marker: usar CFMOTO en marca, pero no rompe el formato interno
             "vehiculo": {
                 "marca": "CFMOTO",
-                "modelo": moto_interes.get("modelo", "N/A"),
-                "anio": contexto_adicional.get("anio_modelo", "N/A"),
-                "combustible": contexto_adicional.get("tipo_motor", "N/A"),
-                "start_stop": "desconocido",
+                "modelo": moto_interes.get("modelo", "desconocido"),
+                "anio": "N/A",  # CFMOTO no tiene año de vehículo
+                "combustible": "N/A",  # CFMOTO no aplica combustible
+                "start_stop": "N/A",
             },
             "cliente": {
                 "nombre": cliente.get("nombre", ""),
@@ -749,10 +766,19 @@ class CustomFunctionsService:
                 "referencia": cliente.get("referencia", "N/A"),
             },
             "estado_flujo": estado_flujo,
-            "moto_interes": moto_interes,
-            "preferencias_compra": preferencias_compra,
-            "contexto_adicional": contexto_adicional,
+            "contexto_adicional": contexto_enriquecido,
         }
+        
+        # Use CFMOTO-specific Horizon API token if available in bot context
+        bot_context = dict(bot_context or {})
+        cfmoto_token = bot_context.get("cfmoto_horizon_api_token")
+        if cfmoto_token:
+            self.horizon_api_token = cfmoto_token
+            logger.info("Using CFMOTO-specific Horizon API token")
+        
+        # Set procedencia to CFMOTO for Horizon routing rules
+        if not bot_context.get("lead_procedencia"):
+            bot_context["lead_procedencia"] = "whatsapp_cfmoto"
 
         return self._handle_service_lead_extraction(adapted_arguments, bot_context)
 
