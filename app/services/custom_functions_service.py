@@ -729,16 +729,32 @@ class CustomFunctionsService:
     @staticmethod
     def _resolve_cfmoto_token_from_env() -> Optional[str]:
         """Resolve CFMOTO token from Flask config or process environment."""
+        def _is_placeholder(value: str) -> bool:
+            normalized = value.strip().lower()
+            return normalized in {
+                "your-cfmoto-horizon-api-token",
+                "your-horizon-api-key",
+                "replace-me",
+            }
+
         try:
             config_value = current_app.config.get("CFMOTO_HORIZON_API_TOKEN")
             if isinstance(config_value, str) and config_value.strip():
-                return config_value.strip()
+                cleaned = config_value.strip()
+                if _is_placeholder(cleaned):
+                    logger.warning("CFMOTO_HORIZON_API_TOKEN is still a placeholder value")
+                    return None
+                return cleaned
         except Exception:
             pass
 
         env_value = os.getenv("CFMOTO_HORIZON_API_TOKEN")
         if isinstance(env_value, str) and env_value.strip():
-            return env_value.strip()
+            cleaned = env_value.strip()
+            if _is_placeholder(cleaned):
+                logger.warning("CFMOTO_HORIZON_API_TOKEN from environment is still a placeholder value")
+                return None
+            return cleaned
         return None
     
     def _handle_bateriasya_extraction(
