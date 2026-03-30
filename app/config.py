@@ -25,6 +25,7 @@ class BaseConfig:
     TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")
 
     HORIZON_API_KEY = os.getenv("HORIZON_API_KEY")
+    CFMOTO_HORIZON_API_TOKEN = os.getenv("CFMOTO_HORIZON_API_TOKEN")
     HORIZON_BASE_URL = os.getenv("HORIZON_BASE_URL", "https://api.horizon.local")
 
     # Database (Horizon persistence / dynamic credentials store)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import requests
 from typing import Any, Dict, List, Optional, Set
 from flask import current_app
@@ -546,12 +547,13 @@ class CustomFunctionsService:
         mensaje: str,
         procedencia: str = "whatsapp",
         vendedor_username: Optional[str] = None,
+        token_override: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Create a lead in Horizon Manager API."""
         try:
             url = f"{self.horizon_api_base}/api/leads/"
             headers = {
-                "Authorization": f"Bearer {self.horizon_api_token}",
+                "Authorization": f"Bearer {token_override or self.horizon_api_token}",
                 "Content-Type": "application/json",
             }
             payload = {
@@ -574,12 +576,12 @@ class CustomFunctionsService:
                 logger.error(f"Response: {e.response.text}")
             return None
 
-    def _get_horizon_lead(self, lead_id: Any) -> Optional[Dict[str, Any]]:
+    def _get_horizon_lead(self, lead_id: Any, token_override: Optional[str] = None) -> Optional[Dict[str, Any]]:
         try:
             lead_value = str(lead_id).strip()
             if not lead_value:
                 return None
-            return self._api_get(f"/api/leads/{lead_value}/")
+            return self._api_get(f"/api/leads/{lead_value}/", token_override=token_override)
         except requests.exceptions.RequestException as e:
             logger.warning(f"No se pudo consultar detalle del lead {lead_id}: {e}")
             return None
@@ -707,6 +709,37 @@ class CustomFunctionsService:
             extras[path] = value
 
         return extras
+
+    @staticmethod
+    def _resolve_horizon_token_from_context(bot_context: Dict[str, Any]) -> Optional[str]:
+        """Resolve token override passed from caller metadata/context."""
+        context = bot_context or {}
+        for key in (
+            "cfmoto_horizon_api_token",
+            "horizon_api_token_override",
+            "horizon_api_token",
+            "cfmoto_api_token",
+            "cfmoto_horizon_token",
+        ):
+            value = context.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _resolve_cfmoto_token_from_env() -> Optional[str]:
+        """Resolve CFMOTO token from Flask config or process environment."""
+        try:
+            config_value = current_app.config.get("CFMOTO_HORIZON_API_TOKEN")
+            if isinstance(config_value, str) and config_value.strip():
+                return config_value.strip()
+        except Exception:
+            pass
+
+        env_value = os.getenv("CFMOTO_HORIZON_API_TOKEN")
+        if isinstance(env_value, str) and env_value.strip():
+            return env_value.strip()
+        return None
     
     def _handle_bateriasya_extraction(
         self,
@@ -771,10 +804,11 @@ class CustomFunctionsService:
         
         # Use CFMOTO-specific Horizon API token if available in bot context
         bot_context = dict(bot_context or {})
-        cfmoto_token = bot_context.get("cfmoto_horizon_api_token")
+        cfmoto_token = self._resolve_cfmoto_token_from_env() or self._resolve_horizon_token_from_context(bot_context)
         if cfmoto_token:
-            self.horizon_api_token = cfmoto_token
-            logger.info("Using CFMOTO-specific Horizon API token")
+            bot_context["horizon_api_token_override"] = cfmoto_token
+            token_tail = cfmoto_token[-4:] if len(cfmoto_token) >= 4 else "short"
+            logger.info("Using CFMOTO Horizon API token (env/context) override (tail=%s)", token_tail)
         
         # Set procedencia to CFMOTO for Horizon routing rules
         if not bot_context.get("lead_procedencia"):
@@ -796,6 +830,7 @@ class CustomFunctionsService:
             cliente = arguments.get("cliente", {})
             estado_flujo = arguments.get("estado_flujo", "pre_cotizacion")
             allow_sucursal_fallback = self._as_bool(bot_context.get("allow_sucursal_fallback"))
+            horizon_token_override = self._resolve_horizon_token_from_context(bot_context)
             
             # Target phone will be determined from lead's assigned vendedor
             target_phone = None
@@ -876,6 +911,7 @@ class CustomFunctionsService:
                     telefono=cliente.get("telefono", ""),
                     mensaje=mensaje_lead,
                     procedencia=lead_procedencia,
+                    token_override=horizon_token_override,
                 )
                 
                 if lead_data and lead_data.get("id"):
@@ -884,7 +920,7 @@ class CustomFunctionsService:
                     self._save_lead_id_to_redis(cliente.get("telefono", ""), lead_id)
                     logger.info(f"Lead created successfully: ID={lead_id}")
 
-                    lead_detail = self._get_horizon_lead(lead_id)
+                    lead_detail = self._get_horizon_lead(lead_id, token_override=horizon_token_override)
                     if isinstance(lead_detail, dict):
                         lead_data = lead_detail
                         logger.info(f"Lead detail fetched for ID={lead_id}")
@@ -905,7 +941,7 @@ class CustomFunctionsService:
                     if vendedor_ref:
                         logger.info(f"Lead asignado a vendedor: {vendedor_ref}")
                         # Get vendedor's phone number
-                        target_phone = self._get_vendedor_phone(vendedor_ref, token=self.horizon_api_token)
+                        target_phone = self._get_vendedor_phone(vendedor_ref, token=horizon_token_override)
                         
                         if not target_phone:
                             logger.warning(f"No se pudo obtener teléfono del vendedor {vendedor_ref}")
