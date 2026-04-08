@@ -87,7 +87,15 @@ Habilita auto-dispatch de lead al completar campos requeridos en memoria de conv
 "auto_dispatch_enabled": true
 ```
 
-### 10. `auto_dispatch_function_name` (string)
+### 10. `notification_target_whatsapp` (string)
+Número de WhatsApp fijo para notificaciones de leads. Si está presente, se usa como destino prioritario.
+
+**Ejemplo:**
+```json
+"notification_target_whatsapp": "+56949472881"
+```
+
+### 11. `auto_dispatch_function_name` (string)
 Nombre de la función custom a ejecutar en el auto-dispatch.
 
 **Ejemplo:**
@@ -95,7 +103,7 @@ Nombre de la función custom a ejecutar en el auto-dispatch.
 "auto_dispatch_function_name": "extract_hori_service_data"
 ```
 
-### 11. `auto_dispatch_required_fields` (array)
+### 12. `auto_dispatch_required_fields` (array)
 Campos obligatorios para disparar auto-dispatch.
 
 **Ejemplo:**
@@ -103,7 +111,7 @@ Campos obligatorios para disparar auto-dispatch.
 "auto_dispatch_required_fields": ["comuna", "marca", "año", "combustible", "start_stop", "telefono"]
 ```
 
-### 12. `auto_dispatch_sent_flag` (string)
+### 13. `auto_dispatch_sent_flag` (string)
 Nombre del flag guardado en Redis para evitar despachos duplicados.
 
 **Ejemplo:**
@@ -121,6 +129,7 @@ Nombre del flag guardado en Redis para evitar despachos duplicados.
   "service_notification_title": "NUEVO SERVICIO",
   "service_display_name": "BateriasYa",
   "lead_procedencia": "whatsapp_bateriasya",
+  "notification_target_whatsapp": "+56949472881",
   "auto_dispatch_enabled": true,
   "auto_dispatch_function_name": "extract_hori_service_data",
   "auto_dispatch_required_fields": ["comuna", "marca", "año", "combustible", "start_stop", "telefono"],

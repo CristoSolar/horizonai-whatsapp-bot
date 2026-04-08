@@ -103,14 +103,16 @@ def main():
     
     metadata = {
         "horizon_api_token": "MAcRfN4JdCvtxNsRiytKWJhE2LlzeyS795Xo53wGRZ4XtplrJGQKhkpi7rGDG2mO",
+        "notification_target_whatsapp": "+56949472881",
+        "allow_sucursal_fallback": True,
         "sucursal_phone_map": {
-            "santiago": "+56978493528",
-            "rm": "+56978493528",
-            "región metropolitana": "+56978493528",
-            "providencia": "+56978493528",
-            "macul": "+56978493528",
-            "la florida": "+56978493528",
-            "las condes": "+56978493528",
+            "santiago": "+56949472881",
+            "rm": "+56949472881",
+            "región metropolitana": "+56949472881",
+            "providencia": "+56949472881",
+            "macul": "+56949472881",
+            "la florida": "+56949472881",
+            "las condes": "+56949472881",
         }
     }
     

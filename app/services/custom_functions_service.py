@@ -931,7 +931,7 @@ class CustomFunctionsService:
             horizon_token_override = self._resolve_horizon_token_from_context(bot_context)
             
             # Target phone will be determined from lead's assigned vendedor
-            target_phone = None
+            target_phone = self._normalize_phone_number(bot_context.get("notification_target_whatsapp"))
             vendedor_id = None
             service_title = str(bot_context.get("service_notification_title") or "NUEVO SERVICIO").strip()
             service_name = str(bot_context.get("service_display_name") or "").strip()
@@ -1082,7 +1082,7 @@ class CustomFunctionsService:
                     else:
                         vendedor_id = vendedor_ref
 
-                    if vendedor_ref:
+                    if vendedor_ref and not target_phone:
                         logger.info(f"Lead asignado a vendedor: {vendedor_ref}")
                         # Get vendedor's phone number
                         target_phone = self._get_vendedor_phone(vendedor_ref, token=horizon_token_override)
@@ -1092,7 +1092,7 @@ class CustomFunctionsService:
                             if allow_sucursal_fallback:
                                 logger.info("Fallback por sucursal habilitado, intentando ruta sucursal")
                                 target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
-                    else:
+                    elif not target_phone:
                         logger.warning("Lead creado sin vendedor asignado")
                         if allow_sucursal_fallback:
                             logger.info("Fallback por sucursal habilitado, intentando ruta sucursal")
@@ -1100,11 +1100,11 @@ class CustomFunctionsService:
                 else:
                     lead_creation_error = "No se pudo crear el lead en Horizon"
                     logger.warning(lead_creation_error)
-                    if allow_sucursal_fallback:
+                    if allow_sucursal_fallback and not target_phone:
                         target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
             else:
                 logger.info("Datos de cliente incompletos")
-                if allow_sucursal_fallback:
+                if allow_sucursal_fallback and not target_phone:
                     logger.info("Fallback por sucursal habilitado, intentando ruta sucursal")
                     target_phone = self._resolve_fallback_phone(servicio.get("comuna", ""))
             
