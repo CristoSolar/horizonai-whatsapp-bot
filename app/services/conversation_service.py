@@ -169,6 +169,7 @@ def handle_incoming_message(
             defined_actions=bot.get("horizon_actions", []),
             function_calls=assistant_response.function_calls,
             user_number=user_number,
+            conversation=conversation,
         )
         
         # If using assistants (thread_id and run_id present), submit tool outputs
@@ -191,6 +192,7 @@ def handle_incoming_message(
                     defined_actions=bot.get("horizon_actions", []),
                     function_calls=calls,
                     user_number=user_number,
+                    conversation=conversation,
                 )
 
             # Submit tool outputs and get final response (supports multi-round tools)
@@ -219,6 +221,7 @@ def handle_incoming_message(
 
     conversation.append({"role": "assistant", "content": reply_text})
     _save_conversation(bot_id=bot_id, user_number=user_number, conversation=conversation)
+    _sync_lead_flow_history(bot=bot, user_number=user_number, conversation=conversation)
 
     return reply_text
 
@@ -431,6 +434,7 @@ def _execute_tool_calls(
     defined_actions: Iterable[Dict[str, Any]],
     function_calls: List[AssistantFunctionCall],
     user_number: str,
+    conversation: Optional[List[Dict[str, Any]]] = None,
 ) -> List[ToolResult]:
     """Execute tool calls, checking custom functions first, then Horizon actions."""
 
@@ -488,6 +492,7 @@ def _execute_tool_calls(
                 "horizon_api_token": horizon_api_token,
                 # Client-specific Horizon API tokens (e.g., CFMOTO)
                 "cfmoto_horizon_api_token": bot_metadata.get("cfmoto_horizon_api_token"),
+                "conversation_history": conversation or [],
             }
             result = custom_functions_service.execute_custom_function(
                 function_name=call.name,
@@ -613,6 +618,7 @@ def _try_auto_dispatch_lead_notification(
             "service_display_name": bot_metadata.get("service_display_name") or bot.get("name"),
             "lead_procedencia": bot_metadata.get("lead_procedencia"),
             "lead_default_email": bot_metadata.get("lead_default_email"),
+            "conversation_history": _load_conversation(bot_id=str(bot.get("id")), user_number=user_number),
         }
 
         result = service.execute_custom_function(
@@ -632,3 +638,37 @@ def _try_auto_dispatch_lead_notification(
             logger.warning(f"⚠️ Auto-dispatch sin éxito para {user_number}: {result}")
     except Exception as exc:
         logger.error(f"❌ Error en auto-dispatch para {user_number}: {exc}")
+
+
+def _sync_lead_flow_history(
+    *,
+    bot: Dict[str, Any],
+    user_number: str,
+    conversation: List[Dict[str, Any]],
+) -> None:
+    """Best-effort sync of current chat history into Horizon lead flow_history."""
+    try:
+        bot_metadata = bot.get("metadata") or {}
+        horizon_api_token = _resolve_horizon_token_for_bot(bot)
+        service = CustomFunctionsService(
+            redis_client=redis_extension.client,
+            horizon_api_token=horizon_api_token,
+        )
+        lead_id = service._get_lead_id_from_redis(user_number)
+        if not lead_id:
+            return
+
+        flow_history = service._build_flow_history_from_messages(conversation)
+        if not flow_history:
+            return
+
+        token_override = bot_metadata.get("cfmoto_horizon_api_token") or horizon_api_token
+        updated = service._update_horizon_lead(
+            lead_id=lead_id,
+            payload={"flow_history": flow_history},
+            token_override=token_override,
+        )
+        if updated is not None:
+            logger.info("🧾 flow_history sincronizado para lead_id=%s con %s mensajes", lead_id, len(flow_history))
+    except Exception as exc:
+        logger.warning("No se pudo sincronizar flow_history para %s: %s", user_number, exc)

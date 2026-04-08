@@ -99,6 +99,16 @@ class CustomFunctionsService:
         resp.raise_for_status()
         return resp.json() if resp.content else {}
 
+    def _api_patch(self, path: str, payload: Dict[str, Any], token_override: Optional[str] = None):
+        headers = {
+            "Authorization": f"Bearer {token_override or self.horizon_api_token}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self.horizon_api_base}{path}"
+        resp = requests.patch(url, headers=headers, json=payload, timeout=self.request_timeout)
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}
+
     @staticmethod
     def _parse_iso(dt_str: str):
         from datetime import datetime
@@ -549,6 +559,7 @@ class CustomFunctionsService:
         vendedor_username: Optional[str] = None,
         token_override: Optional[str] = None,
         custom_fields: Optional[Dict[str, Any]] = None,
+        flow_history: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Create a lead in Horizon Manager API."""
         try:
@@ -568,6 +579,8 @@ class CustomFunctionsService:
                 payload["vendedor_username"] = vendedor_username
             if custom_fields:
                 payload["custom_fields"] = custom_fields
+            if flow_history:
+                payload["flow_history"] = flow_history
             response = requests.post(url, headers=headers, json=payload, timeout=10)
             response.raise_for_status()
             lead_data = response.json()
@@ -576,6 +589,25 @@ class CustomFunctionsService:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error creating lead in Horizon: {e}")
             if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Response: {e.response.text}")
+            return None
+
+    def _update_horizon_lead(
+        self,
+        *,
+        lead_id: Any,
+        payload: Dict[str, Any],
+        token_override: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Update an existing lead in Horizon Manager API."""
+        try:
+            lead_value = str(lead_id).strip()
+            if not lead_value:
+                return None
+            return self._api_patch(f"/api/leads/{lead_value}/", payload, token_override=token_override)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error updating lead {lead_id} in Horizon: {e}")
+            if hasattr(e, "response") and e.response is not None:
                 logger.error(f"Response: {e.response.text}")
             return None
 
@@ -762,6 +794,46 @@ class CustomFunctionsService:
                 return None
             return cleaned
         return None
+
+    @staticmethod
+    def _normalize_flow_history_content(content: Any) -> Any:
+        if isinstance(content, dict):
+            return content
+        if content is None:
+            return ""
+        return str(content)
+
+    def _build_flow_history_from_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert internal conversation messages to Horizon flow_history format."""
+        history: List[Dict[str, Any]] = []
+        for item in messages or []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            history.append(
+                {
+                    "role": role,
+                    "content": self._normalize_flow_history_content(item.get("content")),
+                }
+            )
+        return history
+
+    def _resolve_flow_history(self, arguments: Dict[str, Any], bot_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Resolve flow_history from explicit function args or runtime bot context."""
+        for key in ("flow_history", "conversation", "messages"):
+            candidate = arguments.get(key)
+            if isinstance(candidate, list):
+                parsed = self._build_flow_history_from_messages(candidate)
+                if parsed:
+                    return parsed
+
+        context_candidate = (bot_context or {}).get("conversation_history")
+        if isinstance(context_candidate, list):
+            return self._build_flow_history_from_messages(context_candidate)
+
+        return []
     
     def _handle_bateriasya_extraction(
         self,
@@ -865,6 +937,7 @@ class CustomFunctionsService:
             service_name = str(bot_context.get("service_display_name") or "").strip()
             lead_procedencia = str(bot_context.get("lead_procedencia") or "whatsapp").strip() or "whatsapp"
             header_line = f"{service_title} - {service_name}" if service_name else service_title
+            flow_history = self._resolve_flow_history(arguments, bot_context)
             
             # Format message with extracted data
             vehiculo_lines = [
@@ -921,8 +994,11 @@ class CustomFunctionsService:
             lead_id = None
             lead_creation_error = None
             lead_data = None
+            lead_was_updated = False
             
             if cliente and cliente.get("nombre") and cliente.get("telefono"):
+                lead_phone = cliente.get("telefono", "")
+                lead_name = f"{cliente.get('nombre', '')} {cliente.get('apellido', '')}".strip()
                 # Build vehicle info omitting N/A fields
                 vehiculo_parts = [f"{vehiculo.get('marca', 'N/A')} {vehiculo.get('modelo', 'N/A')}".strip()]
                 if vehiculo.get("anio") not in (None, "N/A", ""):
@@ -944,21 +1020,48 @@ class CustomFunctionsService:
                     or bot_context.get("lead_default_email")
                     or "sin-correo@pendiente.cl"
                 )
-                
-                lead_data = self._create_horizon_lead(
-                    nombre=f"{cliente.get('nombre', '')} {cliente.get('apellido', '')}".strip(),
-                    correo=correo_cliente,
-                    telefono=cliente.get("telefono", ""),
-                    mensaje=mensaje_lead,
-                    procedencia=lead_procedencia,
-                    token_override=horizon_token_override,
-                    custom_fields=arguments.get("_horizon_custom_fields") or None,
-                )
+
+                existing_lead_id = self._get_lead_id_from_redis(lead_phone)
+                custom_fields_payload = arguments.get("_horizon_custom_fields") or None
+                if existing_lead_id:
+                    update_payload = {
+                        "procedencia": lead_procedencia,
+                        "nombre": lead_name,
+                        "correo": correo_cliente,
+                        "telefono": lead_phone,
+                        "mensaje": mensaje_lead,
+                    }
+                    if custom_fields_payload:
+                        update_payload["custom_fields"] = custom_fields_payload
+                    if flow_history:
+                        update_payload["flow_history"] = flow_history
+
+                    lead_data = self._update_horizon_lead(
+                        lead_id=existing_lead_id,
+                        payload=update_payload,
+                        token_override=horizon_token_override,
+                    )
+                    if lead_data:
+                        lead_id = existing_lead_id
+                        lead_was_updated = True
+                        logger.info(f"Lead updated successfully: ID={lead_id}")
+
+                if not lead_data:
+                    lead_data = self._create_horizon_lead(
+                        nombre=lead_name,
+                        correo=correo_cliente,
+                        telefono=lead_phone,
+                        mensaje=mensaje_lead,
+                        procedencia=lead_procedencia,
+                        token_override=horizon_token_override,
+                        custom_fields=custom_fields_payload,
+                        flow_history=flow_history,
+                    )
                 
                 if lead_data and lead_data.get("id"):
                     lead_id = lead_data.get("id")
                     # Save lead ID to Redis for future updates
-                    self._save_lead_id_to_redis(cliente.get("telefono", ""), lead_id)
+                    self._save_lead_id_to_redis(lead_phone, lead_id)
                     logger.info(f"Lead created successfully: ID={lead_id}")
 
                     lead_detail = self._get_horizon_lead(lead_id, token_override=horizon_token_override)
@@ -1101,8 +1204,12 @@ class CustomFunctionsService:
             # Add lead info
             if lead_id:
                 response["lead_id"] = lead_id
-                response["lead_status"] = "created"
-                response["message"] += " y lead creado en Horizon"
+                if lead_was_updated:
+                    response["lead_status"] = "updated"
+                    response["message"] += " y lead actualizado en Horizon"
+                else:
+                    response["lead_status"] = "created"
+                    response["message"] += " y lead creado en Horizon"
             elif lead_creation_error:
                 response["lead_status"] = "error"
                 response["lead_error"] = lead_creation_error
