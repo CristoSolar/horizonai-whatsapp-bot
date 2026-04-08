@@ -670,6 +670,11 @@ def _sync_lead_flow_history(
             payload={"flow_history": flow_history},
             token_override=token_override,
         )
+        if isinstance(updated, dict) and updated.get("_error") == "not_found":
+            service._delete_lead_id_from_redis(user_number)
+            logger.info("🧹 lead_id cache eliminado por 404 para %s", user_number)
+            return
+
         if updated is not None:
             logger.info("🧾 flow_history sincronizado para lead_id=%s con %s mensajes", lead_id, len(flow_history))
     except Exception as exc:

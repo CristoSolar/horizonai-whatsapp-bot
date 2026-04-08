@@ -609,6 +609,8 @@ class CustomFunctionsService:
             logger.error(f"Error updating lead {lead_id} in Horizon: {e}")
             if hasattr(e, "response") and e.response is not None:
                 logger.error(f"Response: {e.response.text}")
+                if e.response.status_code == 404:
+                    return {"_error": "not_found"}
             return None
 
     def _get_horizon_lead(self, lead_id: Any, token_override: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -656,12 +658,13 @@ class CustomFunctionsService:
             return False
         
         try:
-            # Clean phone number for key
-            clean_phone = phone_number.replace("+", "").replace("-", "").replace(" ", "")
-            key = f"lead_id:{clean_phone}"
-            
-            # Store lead ID with 30 days expiration
-            self.redis_client.setex(key, 2592000, str(lead_id))  # 30 days
+            keys = self._build_lead_cache_keys(phone_number)
+            if not keys:
+                return False
+
+            # Store lead ID with 30 days expiration under canonical + compatibility keys
+            for key in keys:
+                self.redis_client.setex(key, 2592000, str(lead_id))  # 30 days
             logger.info(f"Lead ID {lead_id} saved for phone {phone_number}")
             return True
             
@@ -676,20 +679,56 @@ class CustomFunctionsService:
             return None
         
         try:
-            clean_phone = phone_number.replace("+", "").replace("-", "").replace(" ", "")
-            key = f"lead_id:{clean_phone}"
-            lead_id = self.redis_client.get(key)
-            
-            if lead_id:
-                if isinstance(lead_id, bytes):
-                    lead_id = lead_id.decode('utf-8')
-                return int(lead_id)
+            for key in self._build_lead_cache_keys(phone_number):
+                lead_id = self.redis_client.get(key)
+                if lead_id:
+                    if isinstance(lead_id, bytes):
+                        lead_id = lead_id.decode('utf-8')
+                    return int(lead_id)
             
             return None
             
         except Exception as e:
             logger.error(f"Error getting lead ID from Redis: {e}")
             return None
+
+    def _delete_lead_id_from_redis(self, phone_number: str) -> bool:
+        """Delete cached lead ID entries for a phone number."""
+
+        if not self.redis_client:
+            return False
+
+        try:
+            keys = self._build_lead_cache_keys(phone_number)
+            if not keys:
+                return False
+            self.redis_client.delete(*keys)
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting lead ID from Redis: {e}")
+            return False
+
+    @staticmethod
+    def _clean_phone_for_lead_key(phone_number: Any) -> str:
+        return "".join(ch for ch in str(phone_number or "") if ch.isdigit())
+
+    def _build_lead_cache_keys(self, phone_number: Any) -> List[str]:
+        """Build compatible Redis keys for lead cache lookup/save."""
+        keys: List[str] = []
+        seen: Set[str] = set()
+        candidates = [phone_number]
+        normalized = self._normalize_phone_number(phone_number)
+        if normalized:
+            candidates.append(normalized)
+
+        for candidate in candidates:
+            clean_phone = self._clean_phone_for_lead_key(candidate)
+            if not clean_phone or clean_phone in seen:
+                continue
+            keys.append(f"lead_id:{clean_phone}")
+            seen.add(clean_phone)
+
+        return keys
 
     @staticmethod
     def _flatten_payload(prefix: str, value: Any, result: Dict[str, Any]) -> None:
@@ -997,7 +1036,8 @@ class CustomFunctionsService:
             lead_was_updated = False
             
             if cliente and cliente.get("nombre") and cliente.get("telefono"):
-                lead_phone = cliente.get("telefono", "")
+                raw_lead_phone = cliente.get("telefono", "")
+                lead_phone = self._normalize_phone_number(raw_lead_phone) or str(raw_lead_phone).strip()
                 lead_name = f"{cliente.get('nombre', '')} {cliente.get('apellido', '')}".strip()
                 # Build vehicle info omitting N/A fields
                 vehiculo_parts = [f"{vehiculo.get('marca', 'N/A')} {vehiculo.get('modelo', 'N/A')}".strip()]
@@ -1042,9 +1082,13 @@ class CustomFunctionsService:
                         token_override=horizon_token_override,
                     )
                     if lead_data:
-                        lead_id = existing_lead_id
-                        lead_was_updated = True
-                        logger.info(f"Lead updated successfully: ID={lead_id}")
+                        if lead_data.get("_error") == "not_found":
+                            self._delete_lead_id_from_redis(lead_phone)
+                            lead_data = None
+                        else:
+                            lead_id = existing_lead_id
+                            lead_was_updated = True
+                            logger.info(f"Lead updated successfully: ID={lead_id}")
 
                 if not lead_data:
                     lead_data = self._create_horizon_lead(
