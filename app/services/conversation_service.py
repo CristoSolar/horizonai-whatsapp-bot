@@ -75,16 +75,28 @@ def handle_incoming_message(
         raise NotFound(f"Bot '{bot_id}' not found")
 
     # Enrich Redis snapshot with SQL source-of-truth when key fields are missing
-    needs_enrichment = not bot.get("client_id") or not bot.get("metadata") or not bot.get("twilio_account_sid")
+    # or when WhatsApp routing metadata is incomplete in Redis cache.
+    bot_metadata = bot.get("metadata") if isinstance(bot.get("metadata"), dict) else {}
+    missing_notification_routing = (
+        not bot_metadata.get("notification_target_whatsapp")
+        and not bot_metadata.get("sucursal_phone_map")
+    )
+    needs_enrichment = (
+        not bot.get("client_id")
+        or not bot.get("metadata")
+        or not bot.get("twilio_account_sid")
+        or missing_notification_routing
+    )
     if needs_enrichment:
         try:
             engine = db_extension.engine
             sql_repo = SQLBotRepository(engine)
             sql_bot = sql_repo.get(bot_id)
             if sql_bot:
+                sql_metadata = sql_bot.get("metadata") if isinstance(sql_bot.get("metadata"), dict) else {}
                 enriched_updates = {
                     "client_id": sql_bot.get("client_id"),
-                    "metadata": sql_bot.get("metadata") or bot.get("metadata") or {},
+                    "metadata": sql_metadata or bot_metadata,
                     "twilio_account_sid": sql_bot.get("twilio_account_sid") or bot.get("twilio_account_sid"),
                     "twilio_messaging_service_sid": sql_bot.get("twilio_messaging_service_sid") or bot.get("twilio_messaging_service_sid"),
                 }
