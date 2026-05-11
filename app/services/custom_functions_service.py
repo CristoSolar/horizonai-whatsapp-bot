@@ -249,14 +249,22 @@ class CustomFunctionsService:
                 return None
 
             # Intento directo por detalle /api/vendedores/{id}/
+            # Si el endpoint devuelve 404 (Horizon no expone detalle por id), seguir al fallback
             if isinstance(vendedor_ref, int) or (isinstance(vendedor_ref, str) and vendedor_ref.isdigit()):
-                vendedor = self._api_get(f"/api/vendedores/{vendedor_ref}/", token_override=token)
-                phone = self._extract_phone_from_vendedor(vendedor if isinstance(vendedor, dict) else {})
-                if phone:
-                    logger.info(f"Teléfono encontrado para vendedor {vendedor_ref}: {phone}")
-                    return phone
+                try:
+                    vendedor = self._api_get(f"/api/vendedores/{vendedor_ref}/", token_override=token)
+                    phone = self._extract_phone_from_vendedor(vendedor if isinstance(vendedor, dict) else {})
+                    if phone:
+                        logger.info(f"Teléfono encontrado para vendedor {vendedor_ref}: {phone}")
+                        return phone
+                except requests.exceptions.HTTPError as detail_err:
+                    status = getattr(getattr(detail_err, "response", None), "status_code", None)
+                    if status == 404:
+                        logger.info(f"Endpoint /api/vendedores/{vendedor_ref}/ devolvió 404, usando fallback de listado")
+                    else:
+                        raise
 
-            # Fallback por listado (útil cuando vendedor_ref es username)
+            # Fallback por listado (útil cuando vendedor_ref es username o el endpoint detalle no existe)
             data = self._api_get("/api/vendedores/", token_override=token)
             vendedores = data if isinstance(data, list) else data.get("results", [])
             ref_text = str(vendedor_ref).strip().lower()
@@ -629,6 +637,7 @@ class CustomFunctionsService:
             return None
 
         candidates = [
+            lead_payload.get("vendedor_asignado_id"),   # campo real de Horizon API
             lead_payload.get("vendedor_id"),
             lead_payload.get("vendedor"),
             lead_payload.get("assigned_to"),
