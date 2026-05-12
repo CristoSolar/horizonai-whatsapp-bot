@@ -13,6 +13,7 @@ from ..extensions import redis_extension
 from ..repositories import BotRepository
 from ..extensions import db_extension
 from ..repositories.sql_bot_repository import SQLBotRepository
+from .horizon_config_loader import HorizonConfigLoader
 from .horizon_service import HorizonService
 from .client_data_service import ClientDataManager
 from .custom_functions_service import CustomFunctionsService
@@ -51,7 +52,7 @@ def handle_incoming_message(
     repository = repository or BotRepository(redis_extension.client)
     
     bot = repository.get_bot(bot_id)
-    # Fallback: if not found in Redis, attempt database lookup (source of truth)
+    # Fallback tier 2: SQL database
     if not bot:
         try:
             engine = db_extension.engine  # may raise if not configured
@@ -71,6 +72,35 @@ def handle_incoming_message(
                 })
         except Exception:  # pragma: no cover
             pass
+    # Fallback tier 3: Horizon API (fuente de verdad)
+    if not bot:
+        try:
+            base_url = current_app.config.get("HORIZON_BASE_URL")
+            api_key = current_app.config.get("HORIZON_API_KEY")
+            bot_phone = (
+                current_app.config.get("TWILIO_WHATSAPP_FROM", "")
+                .replace("whatsapp:", "")
+                .strip()
+            )
+            if base_url and api_key and bot_phone:
+                loader = HorizonConfigLoader(
+                    horizon_base_url=base_url,
+                    api_token=api_key,
+                    redis_client=redis_extension.client,
+                )
+                horizon_config = loader.get_bot_config(bot_phone)
+                if horizon_config:
+                    bot = repository.create_bot(horizon_config)
+                    logger.info(
+                        "[conversation_service] Bot recuperado de Horizon (fallback) "
+                        "para bot_id=%s phone=%s",
+                        bot_id,
+                        bot_phone,
+                    )
+        except Exception as exc:  # pragma: no cover
+            logger.warning(
+                "[conversation_service] No se pudo recuperar config de Horizon: %s", exc
+            )
     if not bot:
         raise NotFound(f"Bot '{bot_id}' not found")
 

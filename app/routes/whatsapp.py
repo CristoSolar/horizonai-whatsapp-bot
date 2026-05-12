@@ -5,17 +5,35 @@ import logging
 from datetime import UTC, datetime
 from typing import Optional
 
-from flask import Blueprint, Response, request
+from flask import Blueprint, Response, current_app, request
 from twilio.twiml.messaging_response import MessagingResponse
 from werkzeug.exceptions import BadRequest
 
 from ..extensions import redis_extension
 from ..repositories import BotRepository
 from ..services.conversation_service import handle_incoming_message
+from ..services.horizon_config_loader import HorizonConfigLoader
 from ..services.outbound_whatsapp_service import OutboundWhatsAppService
 
 blueprint = Blueprint("whatsapp", __name__)
 logger = logging.getLogger(__name__)
+
+
+def _get_horizon_loader() -> Optional[HorizonConfigLoader]:
+    """Build a HorizonConfigLoader from the current Flask app config, if configured."""
+    try:
+        base_url = current_app.config.get("HORIZON_BASE_URL")
+        api_key = current_app.config.get("HORIZON_API_KEY")
+        if not base_url or not api_key:
+            return None
+        return HorizonConfigLoader(
+            horizon_base_url=base_url,
+            api_token=api_key,
+            redis_client=redis_extension.client,
+        )
+    except Exception as exc:
+        logger.warning("[whatsapp] No se pudo crear HorizonConfigLoader: %s", exc)
+        return None
 
 
 def _get_repository() -> BotRepository:
@@ -90,6 +108,31 @@ def receive_whatsapp() -> Response:
         to_number = request.values.get("To")
         logger.info(f"🔍 Looking for bot by number: {to_number}")
         bot = _find_bot_by_number(repository, to_number)
+
+        # Fallback: Horizon es la fuente de verdad cuando Redis no tiene el bot
+        if not bot:
+            logger.info(
+                "🌐 Bot no encontrado en Redis, consultando Horizon para número: %s",
+                to_number,
+            )
+            loader = _get_horizon_loader()
+            phone = _normalize_number(to_number)
+            if loader and phone:
+                horizon_config = loader.get_bot_config(phone)
+                if horizon_config:
+                    # Persistir en bots:registry para que get_bot(id) funcione
+                    # dentro de handle_incoming_message y en llamadas posteriores.
+                    bot = repository.create_bot(horizon_config)
+                    logger.info(
+                        "✅ Config obtenida de Horizon y cacheada en Redis para phone=%s bot_id=%s",
+                        phone,
+                        bot.get("id"),
+                    )
+                else:
+                    logger.warning(
+                        "⚠️ Horizon tampoco tiene config para phone=%s", phone
+                    )
+
         if not bot:
             logger.error(f"❌ No bot found for number: {to_number}")
             raise BadRequest("No bot found for the provided WhatsApp number")
