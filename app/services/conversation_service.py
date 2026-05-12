@@ -663,6 +663,8 @@ def _try_auto_dispatch_lead_notification(
             "lead_procedencia": bot_metadata.get("lead_procedencia"),
             "lead_default_email": bot_metadata.get("lead_default_email"),
             "conversation_history": _load_conversation(bot_id=str(bot.get("id")), user_number=user_number),
+            # Placeholder lead created by auto-dispatch must not trigger Horizon workflow signals.
+            "omitir_workflow_lead_creado": True,
         }
 
         result = service.execute_custom_function(

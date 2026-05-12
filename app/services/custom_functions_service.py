@@ -568,6 +568,7 @@ class CustomFunctionsService:
         token_override: Optional[str] = None,
         custom_fields: Optional[Dict[str, Any]] = None,
         flow_history: Optional[List[Dict[str, Any]]] = None,
+        omitir_workflow_lead_creado: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Create a lead in Horizon Manager API."""
         try:
@@ -583,6 +584,9 @@ class CustomFunctionsService:
                 "telefono": telefono,
                 "mensaje": mensaje,
             }
+            if omitir_workflow_lead_creado:
+                # Placeholder lead — tell Horizon not to fire workflow signals.
+                payload["omitir_workflow_lead_creado"] = True
             if vendedor_username:
                 payload["vendedor_username"] = vendedor_username
             if custom_fields:
@@ -1076,6 +1080,20 @@ class CustomFunctionsService:
                 )
 
                 existing_lead_id = self._get_lead_id_from_redis(lead_phone)
+                # Fallback: look up by the Twilio user_number from context in case the phone
+                # extracted by OpenAI from conversation differs in format from the Twilio number.
+                if not existing_lead_id:
+                    user_number_ctx = bot_context.get("user_number")
+                    if user_number_ctx and user_number_ctx != lead_phone:
+                        existing_lead_id = self._get_lead_id_from_redis(user_number_ctx)
+                        if existing_lead_id:
+                            logger.info(
+                                "Lead ID %s found via user_number fallback key for phone %s",
+                                existing_lead_id,
+                                lead_phone,
+                            )
+                            # Re-save under the normalised lead_phone so future lookups are direct
+                            self._save_lead_id_to_redis(lead_phone, existing_lead_id)
                 custom_fields_payload = arguments.get("_horizon_custom_fields") or None
                 if existing_lead_id:
                     update_payload = {
@@ -1114,12 +1132,20 @@ class CustomFunctionsService:
                         token_override=horizon_token_override,
                         custom_fields=custom_fields_payload,
                         flow_history=flow_history,
+                        omitir_workflow_lead_creado=bool(
+                            bot_context.get("omitir_workflow_lead_creado")
+                        ),
                     )
                 
                 if lead_data and lead_data.get("id"):
                     lead_id = lead_data.get("id")
-                    # Save lead ID to Redis for future updates
+                    # Save lead ID to Redis for future updates.
+                    # Also save under user_number from context so lookups succeed even when
+                    # the phone extracted by OpenAI from conversation differs in format.
                     self._save_lead_id_to_redis(lead_phone, lead_id)
+                    user_number_ctx = bot_context.get("user_number")
+                    if user_number_ctx and user_number_ctx != lead_phone:
+                        self._save_lead_id_to_redis(user_number_ctx, lead_id)
                     logger.info(f"Lead created successfully: ID={lead_id}")
 
                     lead_detail = self._get_horizon_lead(lead_id, token_override=horizon_token_override)
