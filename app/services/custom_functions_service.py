@@ -567,10 +567,17 @@ class CustomFunctionsService:
         vendedor_username: Optional[str] = None,
         token_override: Optional[str] = None,
         custom_fields: Optional[Dict[str, Any]] = None,
-        flow_history: Optional[List[Dict[str, Any]]] = None,
+        flow_history: Optional[List[Dict[str, Any]]] = None,  # kept for API compat, intentionally ignored
         omitir_workflow_lead_creado: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Create a lead in Horizon Manager API."""
+        """Create a lead in Horizon Manager API.
+
+        Note: flow_history is NOT included in the creation payload even when provided.
+        Horizon's _create_flow_history_items_for_lead appends rows unconditionally, so
+        including it here would create FlowInteractionLog entries that _sync_lead_flow_history
+        (called after every reply) would then duplicate.  _sync_lead_flow_history owns the
+        initial flush by querying the current Horizon count and sending only new messages.
+        """
         try:
             url = f"{self.horizon_api_base}/api/leads/"
             headers = {
@@ -591,8 +598,7 @@ class CustomFunctionsService:
                 payload["vendedor_username"] = vendedor_username
             if custom_fields:
                 payload["custom_fields"] = custom_fields
-            if flow_history:
-                payload["flow_history"] = flow_history
+            # flow_history intentionally omitted — see docstring above.
             response = requests.post(url, headers=headers, json=payload, timeout=10)
             response.raise_for_status()
             lead_data = response.json()
@@ -634,6 +640,35 @@ class CustomFunctionsService:
         except requests.exceptions.RequestException as e:
             logger.warning(f"No se pudo consultar detalle del lead {lead_id}: {e}")
             return None
+
+    def _get_horizon_flow_history_count(
+        self, lead_id: Any, token_override: Optional[str] = None
+    ) -> int:
+        """Return the number of FlowInteractionLog entries Horizon already has for this lead.
+
+        GET /api/leads/<id>/flow-history/ returns {"results": [...list of entries...]}.
+        If the request fails for any reason, returns 0 so the caller sends everything
+        (better to duplicate than to lose history).
+        """
+        try:
+            lead_value = str(lead_id).strip()
+            if not lead_value:
+                return 0
+            data = self._api_get(
+                f"/api/leads/{lead_value}/flow-history/", token_override=token_override
+            )
+            if isinstance(data, dict):
+                results = data.get("results") or data.get("items") or []
+                return len(results) if isinstance(results, list) else int(data.get("count", 0))
+            if isinstance(data, list):
+                return len(data)
+            return 0
+        except Exception as e:
+            logger.warning(
+                "No se pudo obtener flow_history count para lead %s: %s — asumiendo 0",
+                lead_id, e,
+            )
+            return 0
 
     @staticmethod
     def _extract_vendedor_ref_from_lead(lead_payload: Optional[Dict[str, Any]]) -> Any:

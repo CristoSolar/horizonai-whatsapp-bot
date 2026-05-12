@@ -692,11 +692,12 @@ def _sync_lead_flow_history(
     user_number: str,
     conversation: List[Dict[str, Any]],
 ) -> None:
-    """Best-effort sync of current chat history into Horizon lead flow_history.
+    """Sync only *new* conversation messages into Horizon's FlowInteractionLog.
 
-    Uses a Redis counter (flow_history_synced_count:<lead_id>) to track how many
-    messages have already been sent, so only *new* messages are pushed on each call.
-    This prevents duplicate FlowInteractionLog entries in Horizon.
+    Before sending, queries GET /api/leads/<id>/flow-history/ to find how many
+    entries Horizon already has, then sends only the messages beyond that count.
+    This approach survives container restarts because Horizon is the source of
+    truth — no Redis state needed.
     """
     try:
         bot_metadata = bot.get("metadata") or {}
@@ -713,24 +714,22 @@ def _sync_lead_flow_history(
         if not full_flow_history:
             return
 
-        # Deduplication: only send messages not yet synced to Horizon.
-        redis_client = redis_extension.client
-        synced_key = f"flow_history_synced_count:{lead_id}"
-        try:
-            raw = redis_client.get(synced_key)
-            last_synced_count = int(raw) if raw else 0
-        except Exception:
-            last_synced_count = 0
+        token_override = bot_metadata.get("cfmoto_horizon_api_token") or horizon_api_token
 
-        new_messages = full_flow_history[last_synced_count:]
+        # Ask Horizon how many messages it already has — this survives restarts.
+        existing_count = service._get_horizon_flow_history_count(
+            lead_id, token_override=token_override
+        )
+
+        new_messages = full_flow_history[existing_count:]
         if not new_messages:
             logger.debug(
-                "⏭️ flow_history sin mensajes nuevos para lead_id=%s (ya sincronizados: %d)",
-                lead_id, last_synced_count,
+                "⏭️ flow_history sin mensajes nuevos para lead_id=%s "
+                "(Horizon ya tiene %d mensajes)",
+                lead_id, existing_count,
             )
             return
 
-        token_override = bot_metadata.get("cfmoto_horizon_api_token") or horizon_api_token
         updated = service._update_horizon_lead(
             lead_id=lead_id,
             payload={"flow_history": new_messages},
@@ -738,23 +737,14 @@ def _sync_lead_flow_history(
         )
         if isinstance(updated, dict) and updated.get("_error") == "not_found":
             service._delete_lead_id_from_redis(user_number)
-            try:
-                redis_client.delete(synced_key)
-            except Exception:
-                pass
             logger.info("🧹 lead_id cache eliminado por 404 para %s", user_number)
             return
 
         if updated is not None:
-            # Persist the new synced count (30-day TTL matches lead_id cache TTL).
-            try:
-                redis_client.setex(synced_key, 2592000, len(full_flow_history))
-            except Exception:
-                pass
             logger.info(
                 "🧾 flow_history sincronizado para lead_id=%s con %d mensajes nuevos "
-                "(total historial: %d)",
-                lead_id, len(new_messages), len(full_flow_history),
+                "(Horizon tenía %d, total: %d)",
+                lead_id, len(new_messages), existing_count, len(full_flow_history),
             )
     except Exception as exc:
         logger.warning("No se pudo sincronizar flow_history para %s: %s", user_number, exc)
