@@ -68,7 +68,14 @@ def test_service_lead_extraction_sends_flow_history_on_create(monkeypatch):
     ]
 
 
-def test_service_lead_extraction_updates_existing_lead_with_flow_history(monkeypatch):
+def test_service_lead_extraction_updates_existing_lead_without_flow_history(monkeypatch):
+    """When updating an existing lead the PATCH payload must NOT include flow_history.
+
+    flow_history synchronisation is owned exclusively by _sync_lead_flow_history
+    (called after every reply) which uses Redis deduplication to send only new
+    messages.  Including it here would duplicate FlowInteractionLog entries in
+    Horizon.
+    """
     service = CustomFunctionsService(redis_client=_FakeRedis(), horizon_api_token="token")
     captured: Dict[str, Any] = {}
 
@@ -103,10 +110,11 @@ def test_service_lead_extraction_updates_existing_lead_with_flow_history(monkeyp
     assert result["lead_id"] == 999
     assert result["lead_status"] == "updated"
     assert captured["lead_id"] == 999
-    assert captured["payload"]["flow_history"] == [
-        {"role": "user", "content": "Hola"},
-        {"role": "assistant", "content": "Te ayudo"},
-    ]
+    # flow_history must be absent from the PATCH — _sync_lead_flow_history owns it.
+    assert "flow_history" not in captured["payload"]
+    # Core lead fields must still be present.
+    assert captured["payload"]["nombre"] == "Juan Perez"
+    assert captured["payload"]["telefono"] is not None
 
 
 def test_resolve_flow_history_accepts_aliases():

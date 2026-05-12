@@ -1105,8 +1105,10 @@ class CustomFunctionsService:
                     }
                     if custom_fields_payload:
                         update_payload["custom_fields"] = custom_fields_payload
-                    if flow_history:
-                        update_payload["flow_history"] = flow_history
+                    # flow_history is intentionally excluded from PATCH updates:
+                    # _sync_lead_flow_history (called after every reply) owns history
+                    # synchronisation and uses Redis deduplication to send only new
+                    # messages, preventing duplicate FlowInteractionLog entries.
 
                     lead_data = self._update_horizon_lead(
                         lead_id=existing_lead_id,

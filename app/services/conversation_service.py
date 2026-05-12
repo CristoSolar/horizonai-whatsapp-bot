@@ -692,7 +692,12 @@ def _sync_lead_flow_history(
     user_number: str,
     conversation: List[Dict[str, Any]],
 ) -> None:
-    """Best-effort sync of current chat history into Horizon lead flow_history."""
+    """Best-effort sync of current chat history into Horizon lead flow_history.
+
+    Uses a Redis counter (flow_history_synced_count:<lead_id>) to track how many
+    messages have already been sent, so only *new* messages are pushed on each call.
+    This prevents duplicate FlowInteractionLog entries in Horizon.
+    """
     try:
         bot_metadata = bot.get("metadata") or {}
         horizon_api_token = _resolve_horizon_token_for_bot(bot)
@@ -704,22 +709,52 @@ def _sync_lead_flow_history(
         if not lead_id:
             return
 
-        flow_history = service._build_flow_history_from_messages(conversation)
-        if not flow_history:
+        full_flow_history = service._build_flow_history_from_messages(conversation)
+        if not full_flow_history:
+            return
+
+        # Deduplication: only send messages not yet synced to Horizon.
+        redis_client = redis_extension.client
+        synced_key = f"flow_history_synced_count:{lead_id}"
+        try:
+            raw = redis_client.get(synced_key)
+            last_synced_count = int(raw) if raw else 0
+        except Exception:
+            last_synced_count = 0
+
+        new_messages = full_flow_history[last_synced_count:]
+        if not new_messages:
+            logger.debug(
+                "⏭️ flow_history sin mensajes nuevos para lead_id=%s (ya sincronizados: %d)",
+                lead_id, last_synced_count,
+            )
             return
 
         token_override = bot_metadata.get("cfmoto_horizon_api_token") or horizon_api_token
         updated = service._update_horizon_lead(
             lead_id=lead_id,
-            payload={"flow_history": flow_history},
+            payload={"flow_history": new_messages},
             token_override=token_override,
         )
         if isinstance(updated, dict) and updated.get("_error") == "not_found":
             service._delete_lead_id_from_redis(user_number)
+            try:
+                redis_client.delete(synced_key)
+            except Exception:
+                pass
             logger.info("🧹 lead_id cache eliminado por 404 para %s", user_number)
             return
 
         if updated is not None:
-            logger.info("🧾 flow_history sincronizado para lead_id=%s con %s mensajes", lead_id, len(flow_history))
+            # Persist the new synced count (30-day TTL matches lead_id cache TTL).
+            try:
+                redis_client.setex(synced_key, 2592000, len(full_flow_history))
+            except Exception:
+                pass
+            logger.info(
+                "🧾 flow_history sincronizado para lead_id=%s con %d mensajes nuevos "
+                "(total historial: %d)",
+                lead_id, len(new_messages), len(full_flow_history),
+            )
     except Exception as exc:
         logger.warning("No se pudo sincronizar flow_history para %s: %s", user_number, exc)
