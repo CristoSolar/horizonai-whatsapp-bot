@@ -1248,49 +1248,33 @@ class CustomFunctionsService:
                         twilio_messaging_service_sid or "NONE",
                     )
                     
-                    # Try to use template first (for initiating conversations)
-                    # Template variables (adjust based on your approved template)
+                    # Use approved Content Template (no 24h window restriction)
+                    VENDOR_TEMPLATE_SID = "HX00cc715f046b866ef1306d7aa03d5f77"
                     template_vars = {
-                        "1": servicio.get('comuna', 'N/A'),  # Comuna
-                        "2": f"{vehiculo.get('marca', 'N/A')} {vehiculo.get('modelo', 'N/A')}",  # Vehículo
-                        "3": cliente.get('nombre', 'N/A') if cliente else 'N/A',  # Nombre cliente
-                        "4": cliente.get('telefono', 'N/A') if cliente else 'N/A',  # Teléfono cliente
+                        "1": str(cliente.get("nombre", "Pendiente") if cliente else "Pendiente"),
+                        "2": str(cliente.get("apellido", "Pendiente") if cliente else "Pendiente"),
+                        "3": str(cliente.get("telefono", "Pendiente") if cliente else "Pendiente"),
+                        "4": str(cliente.get("correo", "Pendiente") if cliente else "Pendiente"),
+                        "5": str(vehiculo.get("marca", "N/A")),
+                        "6": str(vehiculo.get("modelo", "N/A")),
+                        "7": str(vehiculo.get("anio", "N/A")),
+                        "8": str(vehiculo.get("combustible", "N/A")),
+                        "9": str(vehiculo.get("start_stop", "N/A")),
+                        "10": str(servicio.get("comuna", "N/A")),
                     }
-                    
-                    # Try template method if bot has template configured
-                    if self.twilio_template_sid and hasattr(self.twilio_service, 'send_whatsapp_template'):
-                        logger.info(f"Using Content Template: {self.twilio_template_sid}")
-                        try:
-                            message_sid = self.twilio_service.send_whatsapp_template(
-                                to_number=target_phone,
-                                content_sid=self.twilio_template_sid,
-                                content_variables=template_vars,
-                                from_number=from_number,
-                                messaging_service_sid=twilio_messaging_service_sid,
-                                twilio_account_sid=twilio_account_sid,
-                                twilio_auth_token=twilio_auth_token,
-                            )
-                            logger.info(f"WhatsApp template notification sent to {target_phone}, SID: {message_sid}")
-                            whatsapp_sent = True
-                        except Exception as template_error:
-                            logger.warning(f"Template send failed, trying freeform: {template_error}")
-                            # Fall through to try freeform
-                    
-                    # Fallback to freeform message (only works within 24h window)
-                    if not whatsapp_sent:
-                        logger.info(f"Sending freeform message (requires 24h window)")
-                        logger.info(f"Message body length: {len(message_body)} characters")
-                        
-                        message_sid = self.twilio_service.send_whatsapp_message(
-                            to_number=target_phone,
-                            body=message_body,
-                            from_number=from_number,
-                            messaging_service_sid=twilio_messaging_service_sid,
-                            twilio_account_sid=twilio_account_sid,
-                            twilio_auth_token=twilio_auth_token,
-                        )
-                        logger.info(f"WhatsApp freeform notification sent to {target_phone}, SID: {message_sid}")
-                        whatsapp_sent = True
+
+                    logger.info(f"Using Content Template {VENDOR_TEMPLATE_SID} to notify vendor at {target_phone}")
+                    message_sid = self.twilio_service.send_whatsapp_template(
+                        to_number=target_phone,
+                        content_sid=VENDOR_TEMPLATE_SID,
+                        content_variables=template_vars,
+                        from_number=from_number,
+                        messaging_service_sid=twilio_messaging_service_sid,
+                        twilio_account_sid=twilio_account_sid,
+                        twilio_auth_token=twilio_auth_token,
+                    )
+                    logger.info(f"WhatsApp template notification sent to {target_phone}, SID: {message_sid}")
+                    whatsapp_sent = True
                         
                 except Exception as e:
                     logger.error(f"Error sending WhatsApp notification: {e}")
