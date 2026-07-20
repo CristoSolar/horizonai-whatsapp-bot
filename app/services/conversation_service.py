@@ -339,6 +339,20 @@ def _is_legacy_bateriasya_bot(bot: Dict[str, Any]) -> bool:
     return ("bateria" in bot_name) or (assistant_id == "asst_svobnYajdAylQaM5Iqz8Dof3")
 
 
+def _is_cfmoto_bot(bot: Dict[str, Any]) -> bool:
+    """True if this bot's leads live in the CFMOTO Horizon tenant.
+
+    Gates use of the CFMOTO-specific token in history sync so a globally-set
+    CFMOTO_HORIZON_API_TOKEN never hijacks another bot's sync.
+    """
+    metadata = bot.get("metadata") or {}
+    if metadata.get("cfmoto_horizon_api_token"):
+        return True
+    bot_name = (bot.get("name") or "").lower()
+    procedencia = str(metadata.get("lead_procedencia") or "").lower()
+    return "cfmoto" in bot_name or "cfmoto" in procedencia
+
+
 def _resolve_twilio_from_gestion_empresa(*, client_id: Optional[Any], whatsapp_number: Optional[str]) -> Dict[str, Optional[str]]:
     try:
         engine = db_extension.engine
@@ -714,7 +728,14 @@ def _sync_lead_flow_history(
         if not full_flow_history:
             return
 
-        token_override = bot_metadata.get("cfmoto_horizon_api_token") or horizon_api_token
+        # Sync must use the SAME token the lead was created with. CFMOTO leads
+        # are created with the env token (see _handle_cfmoto_lead_extraction), so
+        # mirror that resolution here, gated to CFMOTO bots.
+        token_override = (
+            bot_metadata.get("cfmoto_horizon_api_token")
+            or (CustomFunctionsService._resolve_cfmoto_token_from_env() if _is_cfmoto_bot(bot) else None)
+            or horizon_api_token
+        )
 
         # Ask Horizon how many messages it already has — this survives restarts.
         existing_count = service._get_horizon_flow_history_count(
