@@ -569,6 +569,7 @@ class CustomFunctionsService:
         custom_fields: Optional[Dict[str, Any]] = None,
         flow_history: Optional[List[Dict[str, Any]]] = None,  # kept for API compat, intentionally ignored
         omitir_workflow_lead_creado: bool = False,
+        sucursal: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """Create a lead in Horizon Manager API.
 
@@ -596,6 +597,8 @@ class CustomFunctionsService:
                 payload["omitir_workflow_lead_creado"] = True
             if vendedor_username:
                 payload["vendedor_username"] = vendedor_username
+            if sucursal is not None:
+                payload["sucursal"] = sucursal
             if custom_fields:
                 payload["custom_fields"] = custom_fields
             # flow_history intentionally omitted — see docstring above.
@@ -999,6 +1002,15 @@ class CustomFunctionsService:
         if not bot_context.get("lead_procedencia"):
             bot_context["lead_procedencia"] = "whatsapp_cfmoto"
 
+        # Resolver id de sucursal Horizon para que el lead se asigne al pool correcto.
+        # Santiago=2, Concepción=1. Sin esto Horizon asigna al pool default (Stgo).
+        sucursal_pref = str(preferencias_compra.get("sucursal_preferencia", "")).strip().lower()
+        sucursal_id = {"santiago": 2, "concepcion": 1, "concepción": 1}.get(sucursal_pref)
+        if sucursal_id is not None:
+            bot_context["lead_sucursal_id"] = sucursal_id
+        else:
+            logger.warning("Sucursal CFMOTO no reconocida: %r — lead sin sucursal", sucursal_pref)
+
         return self._handle_service_lead_extraction(adapted_arguments, bot_context)
 
     def _handle_service_lead_extraction(
@@ -1147,6 +1159,8 @@ class CustomFunctionsService:
                     }
                     if custom_fields_payload:
                         update_payload["custom_fields"] = custom_fields_payload
+                    if bot_context.get("lead_sucursal_id") is not None:
+                        update_payload["sucursal"] = bot_context["lead_sucursal_id"]
                     # flow_history is intentionally excluded from PATCH updates:
                     # _sync_lead_flow_history (called after every reply) owns history
                     # synchronisation and uses Redis deduplication to send only new
@@ -1179,6 +1193,7 @@ class CustomFunctionsService:
                         omitir_workflow_lead_creado=bool(
                             bot_context.get("omitir_workflow_lead_creado")
                         ),
+                        sucursal=bot_context.get("lead_sucursal_id"),
                     )
                 
                 if lead_data and lead_data.get("id"):
