@@ -1014,6 +1014,13 @@ class CustomFunctionsService:
             vehiculo = arguments.get("vehiculo", {})
             cliente = arguments.get("cliente", {})
             estado_flujo = arguments.get("estado_flujo", "pre_cotizacion")
+            # Fallback: si el asistente no capturó teléfono, usar el número de WhatsApp
+            # desde el que escribe el cliente (user_number). El asistente confirma en el
+            # chat si ese número es correcto; si el cliente entrega otro, llega en
+            # cliente.telefono y este fallback no se aplica. Mismo patrón que el
+            # auto-dispatch en conversation_service.py.
+            if cliente and not cliente.get("telefono") and bot_context.get("user_number"):
+                cliente["telefono"] = bot_context["user_number"]
             allow_sucursal_fallback = self._as_bool(bot_context.get("allow_sucursal_fallback"))
             effective_sucursal_fallback = allow_sucursal_fallback or bool(self.sucursal_phone_map)
             if effective_sucursal_fallback and not allow_sucursal_fallback:
