@@ -14,6 +14,7 @@ from ..repositories import BotRepository
 from ..services.conversation_service import (
     handle_incoming_message,
     human_agent_has_control,
+    record_inbound_during_handoff,
 )
 from ..services.horizon_config_loader import HorizonConfigLoader
 from ..services.outbound_whatsapp_service import OutboundWhatsAppService
@@ -155,9 +156,11 @@ def receive_whatsapp() -> Response:
         logger.error("❌ Empty message body")
         raise BadRequest("Body is required")
 
-    # Respect human handoff: if an agent took control in the CRM, stay silent.
+    # Respect human handoff: if an agent took control in the CRM, stay silent
+    # but still record the inbound message so the agent sees it in the CRM.
     if human_agent_has_control(bot, from_number or "unknown"):
-        logger.info("🛑 Human control active — bot skipping reply for %s", from_number)
+        logger.info("🛑 Human control active — recording inbound, bot skipping reply for %s", from_number)
+        record_inbound_during_handoff(bot, user_number=from_number or "unknown", message=body)
         # Empty TwiML => Twilio sends no message.
         return Response(str(MessagingResponse()), mimetype="application/xml")
 
