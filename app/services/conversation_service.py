@@ -438,27 +438,21 @@ def _resolve_horizon_token_for_bot(bot: Dict[str, Any]) -> Optional[str]:
     return current_app.config.get("HORIZON_API_KEY")
 
 
-# Same metadata keys the working CFMOTO lead calls authenticate with
-# (CustomFunctionsService._resolve_horizon_token_from_context). control-status
-# lives on the same Horizon host, so it needs the same per-company token — the
-# generic _resolve_horizon_token_for_bot only checks "horizon_api_token" and
-# would fall back to the placeholder for CFMOTO, causing a 401.
-_CONTROL_TOKEN_METADATA_KEYS = (
-    "cfmoto_horizon_api_token",
-    "horizon_api_token_override",
-    "horizon_api_token",
-    "cfmoto_api_token",
-    "cfmoto_horizon_token",
-)
-
-
 def _resolve_control_status_token(bot: Dict[str, Any]) -> Optional[str]:
+    """Resolve the token control-status authenticates with.
+
+    control-status lives on the same Horizon host as the lead calls, so it
+    needs the SAME per-company token. Mirror the proven CFMOTO lead resolution
+    (see the history-sync path): metadata token, else the CFMOTO env token
+    (gated to CFMOTO bots), else the generic resolver. The generic resolver
+    alone falls back to the HORIZON_API_KEY placeholder for CFMOTO -> 401.
+    """
     metadata = bot.get("metadata") or {}
-    for key in _CONTROL_TOKEN_METADATA_KEYS:
-        value = metadata.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return _resolve_horizon_token_for_bot(bot)
+    return (
+        metadata.get("cfmoto_horizon_api_token")
+        or (CustomFunctionsService._resolve_cfmoto_token_from_env() if _is_cfmoto_bot(bot) else None)
+        or _resolve_horizon_token_for_bot(bot)
+    )
 
 
 def human_agent_has_control(bot: Dict[str, Any], user_number: str) -> bool:
