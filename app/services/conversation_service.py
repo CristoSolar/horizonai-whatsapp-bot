@@ -438,6 +438,29 @@ def _resolve_horizon_token_for_bot(bot: Dict[str, Any]) -> Optional[str]:
     return current_app.config.get("HORIZON_API_KEY")
 
 
+# Same metadata keys the working CFMOTO lead calls authenticate with
+# (CustomFunctionsService._resolve_horizon_token_from_context). control-status
+# lives on the same Horizon host, so it needs the same per-company token — the
+# generic _resolve_horizon_token_for_bot only checks "horizon_api_token" and
+# would fall back to the placeholder for CFMOTO, causing a 401.
+_CONTROL_TOKEN_METADATA_KEYS = (
+    "cfmoto_horizon_api_token",
+    "horizon_api_token_override",
+    "horizon_api_token",
+    "cfmoto_api_token",
+    "cfmoto_horizon_token",
+)
+
+
+def _resolve_control_status_token(bot: Dict[str, Any]) -> Optional[str]:
+    metadata = bot.get("metadata") or {}
+    for key in _CONTROL_TOKEN_METADATA_KEYS:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return _resolve_horizon_token_for_bot(bot)
+
+
 def human_agent_has_control(bot: Dict[str, Any], user_number: str) -> bool:
     """Query the CRM handoff endpoint; True if a human agent took over the chat.
 
@@ -451,7 +474,7 @@ def human_agent_has_control(bot: Dict[str, Any], user_number: str) -> bool:
     status, and the control_mode received for diagnosis.
     """
     base = current_app.config.get("HORIZON_CONTROL_BASE_URL")
-    token = _resolve_horizon_token_for_bot(bot)
+    token = _resolve_control_status_token(bot)
     if not base or not token:
         logger.warning(
             "[control-status] Missing base_url or token (base=%s, token=%s) "
@@ -463,6 +486,7 @@ def human_agent_has_control(bot: Dict[str, Any], user_number: str) -> bool:
     url = f"{base}/api/bot/control-status/"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     params = {"telefono": user_number}
+    token_tail = token[-4:] if len(token) >= 4 else "short"
 
     last_exc = None
     for attempt in (1, 2):  # ponytail: one retry then fail-open; enough for a transient hiccup
@@ -474,8 +498,8 @@ def human_agent_has_control(bot: Dict[str, Any], user_number: str) -> bool:
             except ValueError:
                 pass
             logger.info(
-                "[control-status] telefono=%s status=%s control_mode=%s (attempt %s)",
-                user_number, resp.status_code, control_mode, attempt,
+                "[control-status] telefono=%s status=%s control_mode=%s token_tail=%s (attempt %s)",
+                user_number, resp.status_code, control_mode, token_tail, attempt,
             )
             if resp.status_code >= 400:
                 last_exc = f"HTTP {resp.status_code}"
