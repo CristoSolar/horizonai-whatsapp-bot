@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
+import requests
 from flask import current_app
 from sqlalchemy import text
 from werkzeug.exceptions import BadRequest, NotFound
@@ -435,6 +436,63 @@ def _resolve_horizon_token_for_bot(bot: Dict[str, Any]) -> Optional[str]:
         logger.warning("Could not resolve Horizon token from api_apitoken for empresa_id=%s: %s", client_id, exc)
 
     return current_app.config.get("HORIZON_API_KEY")
+
+
+def human_agent_has_control(bot: Dict[str, Any], user_number: str) -> bool:
+    """Query the CRM handoff endpoint; True if a human agent took over the chat.
+
+    GET {HORIZON_CONTROL_BASE_URL}/api/bot/control-status/?telefono=<user_number>
+    Header: Authorization: Bearer <per-company Horizon token>
+    Response: {"control_mode": "human" | "bot"}. "human" -> bot must NOT reply.
+
+    Fail-safe policy (hybrid): one quick retry on error, then fail-open (return
+    False = bot replies) with a WARN log, so a transient CRM hiccup does not
+    silence the bot for everyone. Every call logs the queried number, HTTP
+    status, and the control_mode received for diagnosis.
+    """
+    base = current_app.config.get("HORIZON_CONTROL_BASE_URL")
+    token = _resolve_horizon_token_for_bot(bot)
+    if not base or not token:
+        logger.warning(
+            "[control-status] Missing base_url or token (base=%s, token=%s) "
+            "for %s -> fail-open (bot replies)",
+            bool(base), bool(token), user_number,
+        )
+        return False
+
+    url = f"{base}/api/bot/control-status/"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    params = {"telefono": user_number}
+
+    last_exc = None
+    for attempt in (1, 2):  # ponytail: one retry then fail-open; enough for a transient hiccup
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=8)
+            control_mode = None
+            try:
+                control_mode = (resp.json() or {}).get("control_mode")
+            except ValueError:
+                pass
+            logger.info(
+                "[control-status] telefono=%s status=%s control_mode=%s (attempt %s)",
+                user_number, resp.status_code, control_mode, attempt,
+            )
+            if resp.status_code >= 400:
+                last_exc = f"HTTP {resp.status_code}"
+                continue  # retry on 4xx/5xx
+            return control_mode == "human"
+        except requests.RequestException as exc:
+            last_exc = exc
+            logger.warning(
+                "[control-status] telefono=%s request error (attempt %s): %s",
+                user_number, attempt, exc,
+            )
+
+    logger.warning(
+        "[control-status] telefono=%s failed after retry (%s) -> fail-open (bot replies)",
+        user_number, last_exc,
+    )
+    return False
 
 
 def _resolve_bot_twilio_credentials(bot: Dict[str, Any]) -> Dict[str, Optional[str]]:

@@ -11,7 +11,10 @@ from werkzeug.exceptions import BadRequest
 
 from ..extensions import redis_extension
 from ..repositories import BotRepository
-from ..services.conversation_service import handle_incoming_message
+from ..services.conversation_service import (
+    handle_incoming_message,
+    human_agent_has_control,
+)
 from ..services.horizon_config_loader import HorizonConfigLoader
 from ..services.outbound_whatsapp_service import OutboundWhatsAppService
 
@@ -151,6 +154,12 @@ def receive_whatsapp() -> Response:
     if not body:
         logger.error("❌ Empty message body")
         raise BadRequest("Body is required")
+
+    # Respect human handoff: if an agent took control in the CRM, stay silent.
+    if human_agent_has_control(bot, from_number or "unknown"):
+        logger.info("🛑 Human control active — bot skipping reply for %s", from_number)
+        # Empty TwiML => Twilio sends no message.
+        return Response(str(MessagingResponse()), mimetype="application/xml")
 
     try:
         logger.info(f"🤖 Generating response...")

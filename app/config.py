@@ -27,6 +27,11 @@ class BaseConfig:
     HORIZON_API_KEY = os.getenv("HORIZON_API_KEY")
     CFMOTO_HORIZON_API_TOKEN = os.getenv("CFMOTO_HORIZON_API_TOKEN")
     HORIZON_BASE_URL = os.getenv("HORIZON_BASE_URL", "https://api.horizon.local")
+    # CRM host exposing /api/bot/control-status/ (human-handoff check). Defaults to
+    # the same host the working CRM action calls use (see CustomFunctionsService).
+    HORIZON_CONTROL_BASE_URL = os.getenv(
+        "HORIZON_CONTROL_BASE_URL", "https://api.horizonai.cl"
+    )
 
     # Database (Horizon persistence / dynamic credentials store)
     DB_HOST = os.getenv("DB_HOST")
