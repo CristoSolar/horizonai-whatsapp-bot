@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import requests
 from typing import Any, Dict, List, Optional, Set
 from flask import current_app
@@ -169,6 +170,17 @@ class CustomFunctionsService:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error listando vendedores: {e}")
             return {"success": False, "error": "No se pudo obtener la lista de vendedores"}
+
+    @staticmethod
+    def _looks_like_phone(value: Any) -> bool:
+        """True if value has enough digits to be a real phone (>= 8).
+
+        Rejects LLM-extracted prose like 'El mismo que le escribo' so the
+        WhatsApp user_number fallback kicks in instead of storing garbage.
+        """
+        if not value:
+            return False
+        return len(re.sub(r"\D", "", str(value))) >= 8
 
     @staticmethod
     def _normalize_phone_number(phone: Any) -> Optional[str]:
@@ -1031,7 +1043,13 @@ class CustomFunctionsService:
             # chat si ese número es correcto; si el cliente entrega otro, llega en
             # cliente.telefono y este fallback no se aplica. Mismo patrón que el
             # auto-dispatch en conversation_service.py.
-            if cliente and not cliente.get("telefono") and bot_context.get("user_number"):
+            if cliente and bot_context.get("user_number") and not self._looks_like_phone(cliente.get("telefono")):
+                raw_tel = cliente.get("telefono")
+                if raw_tel:
+                    logger.info(
+                        "Teléfono inválido del asistente (%r); usando user_number de WhatsApp",
+                        raw_tel,
+                    )
                 cliente["telefono"] = bot_context["user_number"]
             allow_sucursal_fallback = self._as_bool(bot_context.get("allow_sucursal_fallback"))
             effective_sucursal_fallback = allow_sucursal_fallback or bool(self.sucursal_phone_map)
