@@ -455,6 +455,24 @@ def _resolve_control_status_token(bot: Dict[str, Any]) -> Optional[str]:
     )
 
 
+def record_inbound_during_handoff(bot: Dict[str, Any], user_number: str, message: str) -> None:
+    """Human agent has control: don't reply, but still push the customer's
+    inbound message to the CRM lead's flow_history so the agent isn't blind to
+    what the customer just wrote. Mirrors the save+sync tail of
+    handle_incoming_message, minus the assistant reply.
+    """
+    try:
+        bot_id = str(bot.get("id"))
+        conversation = _load_conversation(bot_id=bot_id, user_number=user_number)
+        conversation.append({"role": "user", "content": message})
+        _save_conversation(bot_id=bot_id, user_number=user_number, conversation=conversation)
+        _sync_lead_flow_history(bot=bot, user_number=user_number, conversation=conversation)
+    except Exception as exc:
+        logger.warning(
+            "[handoff] Could not record inbound message for %s: %s", user_number, exc
+        )
+
+
 def human_agent_has_control(bot: Dict[str, Any], user_number: str) -> bool:
     """Query the CRM handoff endpoint; True if a human agent took over the chat.
 
