@@ -636,6 +636,8 @@ def _execute_tool_calls(
                 "twilio_from_whatsapp": twilio_credentials.get("twilio_from_whatsapp"),
                 "allow_sucursal_fallback": bool(bot_metadata.get("allow_sucursal_fallback", False)),
                 "notification_target_whatsapp": bot_metadata.get("notification_target_whatsapp"),
+                # Plantilla de notificacion al vendedor, por bot. Vacia = no se notifica.
+                "twilio_template_sid": bot_metadata.get("twilio_template_sid"),
                 "service_notification_title": bot_metadata.get("service_notification_title"),
                 "service_display_name": bot_metadata.get("service_display_name") or bot.get("name"),
                 "lead_procedencia": bot_metadata.get("lead_procedencia"),
@@ -766,6 +768,8 @@ def _try_auto_dispatch_lead_notification(
             "twilio_from_whatsapp": twilio_credentials.get("twilio_from_whatsapp"),
             "allow_sucursal_fallback": bool(bot_metadata.get("allow_sucursal_fallback", False)),
             "notification_target_whatsapp": bot_metadata.get("notification_target_whatsapp"),
+                # Plantilla de notificacion al vendedor, por bot. Vacia = no se notifica.
+                "twilio_template_sid": bot_metadata.get("twilio_template_sid"),
             "service_notification_title": bot_metadata.get("service_notification_title"),
             "service_display_name": bot_metadata.get("service_display_name") or bot.get("name"),
             "lead_procedencia": bot_metadata.get("lead_procedencia"),

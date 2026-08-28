@@ -1272,7 +1272,16 @@ class CustomFunctionsService:
             # Send WhatsApp message to sucursal
             whatsapp_sent = False
             message_sid = None
-            if self.twilio_service and target_phone:
+            # Plantilla por bot, ya no hardcodeada. Sin plantilla configurada no se notifica al
+            # vendedor: CFMOTO asigna el lead por sistema y no quiere aviso por WhatsApp. El SID
+            # ademas vive en la SUBCUENTA del cliente, no en la maestra: por eso se envia con las
+            # credenciales de bot_context y no con las del entorno.
+            vendor_template_sid = (bot_context.get("twilio_template_sid") or "").strip()
+            if self.twilio_service and target_phone and not vendor_template_sid:
+                logger.info(
+                    "Bot sin twilio_template_sid configurado: se omite la notificacion al vendedor"
+                )
+            if self.twilio_service and target_phone and vendor_template_sid:
                 try:
                     from_number = bot_context.get("twilio_from_whatsapp") or bot_context.get("twilio_phone_number")
                     twilio_account_sid = bot_context.get("twilio_account_sid")
@@ -1288,8 +1297,8 @@ class CustomFunctionsService:
                         twilio_messaging_service_sid or "NONE",
                     )
                     
-                    # Use approved Content Template (no 24h window restriction)
-                    VENDOR_TEMPLATE_SID = "HX00cc715f046b866ef1306d7aa03d5f77"
+                    # Content Template aprobado (sin restriccion de ventana de 24h)
+                    VENDOR_TEMPLATE_SID = vendor_template_sid
                     template_vars = {
                         "1": str(cliente.get("nombre", "Pendiente") if cliente else "Pendiente"),
                         "2": str(cliente.get("apellido", "Pendiente") if cliente else "Pendiente"),

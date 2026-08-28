@@ -130,18 +130,29 @@ class OpenAIAssistantService:
         )
 
         input_messages = self._build_messages(instructions, conversation)
-        for result in tool_results:
-            input_messages.append(
-                {
-                    "role": "tool",
-                    "content": result.content,
-                    "name": result.name,
-                }
-            )
+        # Los resultados van como un mensaje de sistema, no con role="tool": Chat Completions
+        # exige tool_call_id en los mensajes de rol "tool" y acá ya no tenemos los ids del turno.
+        resumen = "\n".join(
+            "- {}: {}".format(result.name, result.content) for result in tool_results
+        )
+        input_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Resultado de las acciones ya ejecutadas en los sistemas internos:\n"
+                    + resumen
+                    + "\n\nRedacta el mensaje de cierre para el cliente a partir de esto, "
+                    "siguiendo tu estilo. No menciones nombres de funciones, ids ni detalles "
+                    "tecnicos."
+                ),
+            }
+        )
 
-        response = client.responses.create(model=model, input=input_messages)
-        assistant_response = self._parse_response(response)
-        return assistant_response.reply_text
+        # client.responses.create() requiere openai>=1.66; la imagen trae 1.51.0 y reventaba con
+        # "'OpenAI' object has no attribute 'responses'". Este camino nunca se ejecutaba mientras
+        # los bots usaban la Assistants API; quedo expuesto al migrarlos a Chat Completions.
+        response = client.chat.completions.create(model=model, messages=input_messages)
+        return self._parse_chat_response(response).reply_text
 
     # ------------------------------------------------------------------
     # Internal helpers
