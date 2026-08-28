@@ -28,6 +28,23 @@ from .openai_service import (
 SESSION_KEY_PATTERN = "session:{bot_id}:{user_number}"
 MAX_HISTORY_MESSAGES = 20
 
+
+def _como_dict(valor: Any) -> Dict[str, Any]:
+    """Normaliza la columna JSON `metadata` a dict.
+
+    Segun el driver, MySQL puede devolverla ya deserializada o como texto.
+    """
+    if isinstance(valor, dict):
+        return valor
+    if isinstance(valor, (str, bytes)):
+        try:
+            decodificado = json.loads(valor)
+        except (ValueError, TypeError):
+            return {}
+        return decodificado if isinstance(decodificado, dict) else {}
+    return {}
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -60,7 +77,11 @@ def handle_incoming_message(
             sql_repo = SQLBotRepository(engine)
             bot = sql_repo.get(bot_id)
             if bot:
-                # Cache minimal snapshot in Redis for faster subsequent retrievals
+                # Cache snapshot in Redis for faster subsequent retrievals.
+                # metadata, client_id y los sids de Twilio van incluidos a propósito:
+                # sin ellos el bot se levanta sin extractor, sin auto-dispatch y sin
+                # plantilla de notificación, y el bloque de enriquecimiento de más
+                # abajo tiene que ir a SQL en cada mensaje para reponerlos.
                 repository.create_bot({
                     "id": bot.get("id"),
                     "name": bot.get("external_ref") or bot.get("id"),
@@ -70,6 +91,10 @@ def handle_incoming_message(
                     "assistant_functions": bot.get("assistant_functions") or [],
                     "horizon_actions": bot.get("horizon_actions") or [],
                     "twilio_phone_number": bot.get("twilio_phone_number"),
+                    "client_id": bot.get("client_id"),
+                    "metadata": _como_dict(bot.get("metadata")),
+                    "twilio_account_sid": bot.get("twilio_account_sid"),
+                    "twilio_messaging_service_sid": bot.get("twilio_messaging_service_sid"),
                 })
         except Exception:  # pragma: no cover
             pass
@@ -105,9 +130,13 @@ def handle_incoming_message(
     if not bot:
         raise NotFound(f"Bot '{bot_id}' not found")
 
+    # Venga de donde venga (Redis, SQL o Horizon), `metadata` se usa mas abajo como
+    # dict. MySQL puede devolver la columna JSON como texto segun el driver.
+    bot["metadata"] = _como_dict(bot.get("metadata"))
+
     # Enrich Redis snapshot with SQL source-of-truth when key fields are missing
     # or when WhatsApp routing metadata is incomplete in Redis cache.
-    bot_metadata = bot.get("metadata") if isinstance(bot.get("metadata"), dict) else {}
+    bot_metadata = bot["metadata"]
     missing_notification_routing = (
         not bot_metadata.get("notification_target_whatsapp")
         and not bot_metadata.get("sucursal_phone_map")
@@ -124,7 +153,7 @@ def handle_incoming_message(
             sql_repo = SQLBotRepository(engine)
             sql_bot = sql_repo.get(bot_id)
             if sql_bot:
-                sql_metadata = sql_bot.get("metadata") if isinstance(sql_bot.get("metadata"), dict) else {}
+                sql_metadata = _como_dict(sql_bot.get("metadata"))
                 enriched_updates = {
                     "client_id": sql_bot.get("client_id"),
                     "metadata": sql_metadata or bot_metadata,
