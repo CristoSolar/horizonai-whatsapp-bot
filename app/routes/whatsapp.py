@@ -50,15 +50,48 @@ def _normalize_number(number: Optional[str]) -> Optional[str]:
     return number.replace("whatsapp:", "")
 
 
+def _bot_es_utilizable(bot: dict) -> bool:
+    """Un bot sin prompt no puede contestar: responde vacío o falla."""
+    return bool((bot.get("instructions") or "").strip())
+
+
 def _find_bot_by_number(repository: BotRepository, target_number: Optional[str]):
+    """Resuelve el bot dueño de un número de Twilio.
+
+    Puede haber más de una entrada con el mismo número en el registry —restos de
+    clientes viejos, altas a medias— y el orden de un hash de Redis no es estable:
+    un RESTORE lo reordena. Elegir "la primera que coincida" hace que un bot vivo
+    quede tapado por basura, en silencio y solo a veces. Se prefiere una entrada
+    con prompt; sin eso, no hay bot que sirva.
+    """
     normalized = _normalize_number(target_number)
     if not normalized:
         return None
-    for bot in repository.list_bots():
-        stored = _normalize_number(bot.get("twilio_phone_number"))
-        if stored == normalized:
-            return bot
-    return None
+
+    coincidencias = [
+        bot
+        for bot in repository.list_bots()
+        if _normalize_number(bot.get("twilio_phone_number")) == normalized
+    ]
+    if not coincidencias:
+        return None
+
+    utilizables = [bot for bot in coincidencias if _bot_es_utilizable(bot)]
+    if len(coincidencias) > 1:
+        logger.warning(
+            "[whatsapp] %s entradas comparten el número %s: %s. Se usa la que tiene prompt.",
+            len(coincidencias),
+            normalized,
+            [bot.get("id") for bot in coincidencias],
+        )
+    if not utilizables:
+        logger.error(
+            "[whatsapp] Ninguna entrada del número %s tiene prompt: %s",
+            normalized,
+            [bot.get("id") for bot in coincidencias],
+        )
+        return coincidencias[0]
+    return utilizables[0]
 
 
 def _resolve_tenant_id(bot: dict) -> str:
