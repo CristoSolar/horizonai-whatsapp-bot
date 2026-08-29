@@ -278,11 +278,10 @@ def handle_incoming_message(
             else:
                 reply_text = "Lo siento, hubo un error procesando las acciones."
         else:
-            # Using chat completions (not assistant), use old flow
-            conversation.extend(
-                {"role": "tool", "name": result.name, "content": result.content}
-                for result in tool_results
-            )
+            # Chat Completions rechaza un mensaje de rol "tool" que no venga precedido por un
+            # assistant con tool_calls, y acá no tenemos esos ids. Los resultados viajan aparte,
+            # en tool_results, y summarize_tool_results los inyecta como system. Agregarlos al
+            # historial rompia el turno entero: el lead se creaba y el cliente veia un error.
             reply_text = openai_service.summarize_tool_results(
                 bot=bot,
                 conversation=conversation,

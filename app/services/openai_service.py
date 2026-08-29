@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
 
 from flask import current_app
 
 from ..extensions import OpenAIExtension
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -165,14 +168,30 @@ class OpenAIAssistantService:
             )
         return client
 
-    @staticmethod
+    ROLES_VALIDOS = frozenset({"system", "user", "assistant"})
+
+    @classmethod
     def _build_messages(
-        instructions: str, conversation: List[Dict[str, str]]
+        cls, instructions: str, conversation: List[Dict[str, str]]
     ) -> List[Dict[str, str]]:
+        """Arma los mensajes para Chat Completions descartando roles que no acepta.
+
+        Las sesiones guardadas en Redis pueden traer mensajes de rol "tool" escritos
+        por versiones anteriores. Mandarlos da 400 ("messages with role 'tool' must be
+        a response to a preceeding message with 'tool_calls'") y tumba el turno entero,
+        asi que se filtran en vez de arrastrar el historial envenenado.
+        """
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": instructions}
         ]
-        messages.extend(conversation)
+        for mensaje in conversation:
+            if mensaje.get("role") in cls.ROLES_VALIDOS:
+                messages.append(mensaje)
+            else:
+                logger.warning(
+                    "[openai] Mensaje con rol '%s' descartado del historial",
+                    mensaje.get("role"),
+                )
         return messages
 
     @staticmethod
